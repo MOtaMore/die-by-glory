@@ -1,0 +1,10 @@
+[package]
+name = "die_by_glory"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+macroquad = "0.4.16"
+noise = "0.9.0"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
