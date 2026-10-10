@@ -50,7 +50,9 @@ enum AppState {
         destination_marker: Option<(i32, i32)>,
         last_drag_pos: Option<(f32, f32)>,
         is_build_mode: bool,
+        is_demolish_mode: bool,
         build_material: BuildMaterial,
+        active_hotbar_slot: usize,
     },
 }
 
@@ -98,7 +100,9 @@ fn load_game_state(save: SaveGame) -> AppState {
         destination_marker: None,
         last_drag_pos: None,
         is_build_mode: false,
+        is_demolish_mode: false,
         build_material: BuildMaterial::WoodPlanks,
+        active_hotbar_slot: 0,
     }
 }
 
@@ -293,7 +297,6 @@ async fn main() {
     let mut app_state = AppState::MainMenu {
         menu_state: MenuState::new(),
     };
-    let mut right_click_start_pos: Option<(f32, f32)> = None;
 
     loop {
         let dt = get_frame_time().min(0.1);
@@ -416,7 +419,9 @@ async fn main() {
                         destination_marker: None,
                         last_drag_pos: None,
                         is_build_mode: false,
+                        is_demolish_mode: false,
                         build_material: BuildMaterial::WoodPlanks,
+                        active_hotbar_slot: 0,
                     };
                 }
             }
@@ -432,7 +437,9 @@ async fn main() {
                 destination_marker,
                 last_drag_pos,
                 is_build_mode,
+                is_demolish_mode,
                 build_material,
+                active_hotbar_slot,
             } => {
                 camera.update_viewport(screen_width(), screen_height(), 330.0, 38.0, 28.0);
                 world.update_time(dt);
@@ -498,24 +505,7 @@ async fn main() {
                 };
 
                 let build_reticle = if *is_build_mode {
-                    let is_demolish = if let Some((hx, hy)) = hover_coord {
-                        let hz = world.get_surface_z(hx, hy);
-                        let t_kind = world.get_tile(hx, hy, hz).map(|t| t.kind).unwrap_or(TileKind::Air);
-                        t_kind == TileKind::TreeTrunk
-                            || t_kind == TileKind::PalmTree
-                            || t_kind == TileKind::Stone
-                            || t_kind == TileKind::MountainRock
-                            || t_kind == TileKind::MountainPeak
-                            || t_kind == TileKind::Granite
-                            || t_kind == TileKind::WoodPlanks
-                            || t_kind == TileKind::Cobblestone
-                            || t_kind == TileKind::Soil
-                            || t_kind == TileKind::Grass
-                            || t_kind == TileKind::Sand
-                    } else {
-                        false
-                    };
-                    Some((build_material.glyph(), build_material.color(), is_demolish))
+                    Some((build_material.glyph(), build_material.color(), *is_demolish_mode))
                 } else {
                     None
                 };
@@ -539,7 +529,9 @@ async fn main() {
                     ui_state,
                     font.as_ref(),
                     *is_build_mode,
+                    *is_demolish_mode,
                     *build_material,
+                    *active_hotbar_slot,
                 );
 
                 // ==============================================================
@@ -843,9 +835,10 @@ async fn main() {
                 if (is_key_pressed(KeyCode::B) || ui_res.clicked_toggle_build_mode) && !inventory_ui.is_open {
                     *is_build_mode = !*is_build_mode;
                     if *is_build_mode {
+                        *is_demolish_mode = false;
                         let cnt = player.inventory.count_item(build_material.item_type());
                         ui_state.add_log(format!(
-                            "🔨 [MODO CONSTRUCCIÓN: ACTIVADO] Clic Izq: Poner {} [{}] (x{}) | Clic Der: Romper | R: Cambiar | B: Salir",
+                            "🔨 [MODO CONSTRUCCIÓN ACTIVADO] Clic Izq: Colocar {} [{}] (x{}) | Presiona [X]: Alternar Destrucción | Clic Der: Moverse | B: Salir",
                             build_material.name_es(),
                             build_material.glyph(),
                             cnt
@@ -855,9 +848,76 @@ async fn main() {
                     }
                 }
 
+                // -------------------------------------------------------------
+                // MODO DESTRUCCIÓN / COLOCAR ALTERNANTE [Tecla X / Botón UI]
+                // -------------------------------------------------------------
+                if (is_key_pressed(KeyCode::X) || ui_res.clicked_toggle_demolish) && !inventory_ui.is_open {
+                    if !*is_build_mode {
+                        *is_build_mode = true;
+                        *is_demolish_mode = true;
+                        ui_state.add_log("💥 [MODO DESTRUCCIÓN ACTIVADO] Clic Izquierdo para demoler bloques o cosechar. Presiona [X] para modo Colocar.".to_string());
+                    } else {
+                        *is_demolish_mode = !*is_demolish_mode;
+                        if *is_demolish_mode {
+                            ui_state.add_log("💥 [MODO DESTRUCCIÓN ACTIVADO] Clic Izquierdo para demoler o cosechar. Presiona [X] para volver a Colocar.".to_string());
+                        } else {
+                            let cnt = player.inventory.count_item(build_material.item_type());
+                            ui_state.add_log(format!(
+                                "🔨 [MODO COLOCAR ACTIVADO] Clic Izquierdo para colocar {} [{}] (x{}). Presiona [X] para modo Destrucción.",
+                                build_material.name_es(),
+                                build_material.glyph(),
+                                cnt
+                            ));
+                        }
+                    }
+                }
+
+                // -------------------------------------------------------------
+                // HOTBAR DE CONSTRUCCIÓN: SELECCIÓN [Teclas 1..5 / Clic UI]
+                // -------------------------------------------------------------
+                let mut requested_hotbar_slot = ui_res.clicked_hotbar_slot;
+                if !inventory_ui.is_open {
+                    if is_key_pressed(KeyCode::Key1) { requested_hotbar_slot = Some(0); }
+                    else if is_key_pressed(KeyCode::Key2) { requested_hotbar_slot = Some(1); }
+                    else if is_key_pressed(KeyCode::Key3) { requested_hotbar_slot = Some(2); }
+                    else if is_key_pressed(KeyCode::Key4) { requested_hotbar_slot = Some(3); }
+                    else if is_key_pressed(KeyCode::Key5) { requested_hotbar_slot = Some(4); }
+                }
+
+                if let Some(slot_idx) = requested_hotbar_slot {
+                    *active_hotbar_slot = slot_idx;
+                    if let Some(mat) = player.inventory.get_hotbar_material(slot_idx) {
+                        *build_material = mat;
+                        *is_build_mode = true;
+                        *is_demolish_mode = false;
+                        let cnt = player.inventory.count_item(mat.item_type());
+                        ui_state.add_log(format!(
+                            "🧱 Hotbar [{}]: {} [{}] seleccionado (x{} en mochila). Modo Colocar ACTIVO.",
+                            slot_idx + 1,
+                            mat.name_es(),
+                            mat.glyph(),
+                            cnt
+                        ));
+                    } else if let Some(item) = player.inventory.hotbar[slot_idx] {
+                        let cnt = player.inventory.count_item(item);
+                        ui_state.add_log(format!(
+                            "🎒 Hotbar [{}]: {} (x{} en mochila).",
+                            slot_idx + 1,
+                            item.name(),
+                            cnt
+                        ));
+                    } else {
+                        ui_state.add_log(format!(
+                            "ℹ️ Hotbar [{}] está vacío. Abre el Inventario [I] y asigna bloques con las teclas 1-5.",
+                            slot_idx + 1
+                        ));
+                    }
+                }
+
                 // Ciclar material de construcción [Tecla R]
                 if is_key_pressed(KeyCode::R) && !inventory_ui.is_open {
                     *build_material = build_material.next();
+                    *is_demolish_mode = false;
                     let cnt = player.inventory.count_item(build_material.item_type());
                     ui_state.add_log(format!(
                         "🧱 Material activo: {} [{}] (x{} en mochila)",
@@ -871,6 +931,7 @@ async fn main() {
                 if let Some(mat) = ui_res.clicked_select_material {
                     *build_material = mat;
                     *is_build_mode = true;
+                    *is_demolish_mode = false;
                     let cnt = player.inventory.count_item(mat.item_type());
                     ui_state.add_log(format!(
                         "🧱 Material seleccionado: {} [{}] (x{} en mochila). Modo Construcción ACTIVO.",
@@ -886,6 +947,7 @@ async fn main() {
                 if (is_key_pressed(KeyCode::C) || ui_res.clicked_build_planks) && !inventory_ui.is_open {
                     *build_material = BuildMaterial::WoodPlanks;
                     *is_build_mode = true;
+                    *is_demolish_mode = false;
                     if is_hover_in_bounds {
                         handle_place_block(world, player, ui_state, BuildMaterial::WoodPlanks, hover_gx, hover_gy, destination_marker);
                     } else {
@@ -899,6 +961,7 @@ async fn main() {
                 if (is_key_pressed(KeyCode::V) || ui_res.clicked_build_cobble) && !inventory_ui.is_open {
                     *build_material = BuildMaterial::Cobblestone;
                     *is_build_mode = true;
+                    *is_demolish_mode = false;
                     if is_hover_in_bounds {
                         handle_place_block(world, player, ui_state, BuildMaterial::Cobblestone, hover_gx, hover_gy, destination_marker);
                     } else {
@@ -907,9 +970,9 @@ async fn main() {
                 }
 
                 // -------------------------------------------------------------
-                // COSECHA / MINERÍA / TALA / DEMOLICIÓN [X / T / Botón HARV/DEM]
+                // COSECHA / MINERÍA / TALA / DEMOLICIÓN [Tecla T / Botón HARV/DEM]
                 // -------------------------------------------------------------
-                if (is_key_pressed(KeyCode::X) || is_key_pressed(KeyCode::T) || ui_res.clicked_harvest_demolish) && !inventory_ui.is_open {
+                if (is_key_pressed(KeyCode::T) || ui_res.clicked_harvest_demolish) && !inventory_ui.is_open {
                     let target_opt = if is_hover_in_bounds {
                         Some((hover_gx, hover_gy))
                     } else {
@@ -941,7 +1004,7 @@ async fn main() {
                     if let Some((tx, ty)) = target_opt {
                         handle_harvest_demolish(world, player, ui_state, tx, ty, destination_marker);
                     } else {
-                        ui_state.add_log("Pasa el cursor sobre un árbol, roca o bloque para cosechar/demoler [X/T].".to_string());
+                        ui_state.add_log("Pasa el cursor sobre un árbol, roca o bloque para cosechar/demoler [T].".to_string());
                     }
                 }
 
@@ -1013,11 +1076,7 @@ async fn main() {
                     camera.follow_player = false;
                 }
 
-                if is_mouse_button_pressed(MouseButton::Right) {
-                    right_click_start_pos = Some((mx, my));
-                }
-
-                if is_mouse_button_down(MouseButton::Right) || is_mouse_button_down(MouseButton::Middle) {
+                if is_mouse_button_down(MouseButton::Middle) {
                     if let Some((prev_x, prev_y)) = *last_drag_pos {
                         let (cw, ch) = camera.effective_cell_size();
                         camera.x -= (mx - prev_x) / cw;
@@ -1035,65 +1094,38 @@ async fn main() {
                     in_badge || in_dossier
                 };
 
-                // Clic derecho (pulsación corta): Colocar Bloque (Planks / Cobblestone / Dirt)
-                if is_mouse_button_released(MouseButton::Right)
+                // ==============================================================
+                // CLIC DERECHO: SIEMPRE ES PARA MOVERSE (PATHFINDING A*)
+                // ==============================================================
+                if is_mouse_button_pressed(MouseButton::Right)
                     && !ui_res.is_mouse_over_ui
                     && !inventory_ui.is_open
                     && !is_mouse_over_radar
                     && camera.is_point_in_viewport(mx, my)
                 {
-                    let was_drag = if let Some((sx, sy)) = right_click_start_pos {
-                        (mx - sx).hypot(my - sy) >= 8.0
-                    } else {
-                        false
-                    };
-                    right_click_start_pos = None;
-
-                    if !was_drag && is_hover_in_bounds {
-                        if *is_build_mode {
-                            handle_harvest_demolish(world, player, ui_state, hover_gx, hover_gy, destination_marker);
+                    if is_hover_in_bounds {
+                        if let Some(path) = find_path(world, (player.x, player.y), (hover_gx, hover_gy)) {
+                            *destination_marker = Some((hover_gx, hover_gy));
+                            let steps = path.len();
+                            player.set_path(path);
+                            ui_state.add_log(format!(
+                                "Moviéndose hacia ({}, {}): {} pasos.",
+                                hover_gx, hover_gy, steps
+                            ));
                         } else {
-                            let placeable_item = if let Some(item) = player.inventory.equipment.off_hand.filter(|i| i.placeable_tile().is_some()) {
-                                Some(item)
-                            } else if let Some(item) = player.inventory.equipment.main_hand.filter(|i| i.placeable_tile().is_some()) {
-                                Some(item)
-                            } else if player.inventory.count_item(ItemType::WoodPlanks) > 0 {
-                                Some(ItemType::WoodPlanks)
-                            } else if player.inventory.count_item(ItemType::Cobblestone) > 0 {
-                                Some(ItemType::Cobblestone)
-                            } else if player.inventory.count_item(ItemType::DirtBlock) > 0 {
-                                Some(ItemType::DirtBlock)
-                            } else {
-                                None
-                            };
-
-                            if let Some(item) = placeable_item {
-                                let dist = ((player.x - hover_gx).pow(2) as f32 + (player.y - hover_gy).pow(2) as f32).sqrt();
-                                if dist <= 3.5 {
-                                    match world.place_block_at(hover_gx, hover_gy, item) {
-                                        Ok(_) => {
-                                            player.inventory.remove_item(item, 1);
-                                            player.energy = (player.energy - 3.0).max(0.0);
-                                            let rem = player.inventory.count_item(item);
-                                            ui_state.add_log(format!("🔨 Placed {} at ({}, {})! (Remaining: {})", item.name(), hover_gx, hover_gy, rem));
-                                        }
-                                        Err(e) => {
-                                            ui_state.add_log(format!("Cannot place block: {}", e));
-                                        }
-                                    }
-                                } else if let Some(path) = find_path(world, (player.x, player.y), (hover_gx, hover_gy)) {
-                                    *destination_marker = Some((hover_gx, hover_gy));
-                                    player.set_path(path);
-                                    ui_state.add_log(format!("Moving closer to place {}...", item.name()));
-                                }
-                            } else {
-                                ui_state.add_log("No building blocks in backpack to place. Craft Wood Planks or Cobblestone [I].".to_string());
-                            }
+                            ui_state.add_log(format!(
+                                "Destino ({}, {}) bloqueado o fuera de alcance.",
+                                hover_gx, hover_gy
+                            ));
                         }
                     }
                 }
 
-                // Clic izquierdo: Colocar Bloque (en Modo Construcción) o Pathfinding A* / Caza de Animales
+                // ==============================================================
+                // CLIC IZQUIERDO: CIRCUNSTANCIAL
+                // - En Modo Construcción (B): Coloca bloque (por defecto) o Demuele/Rompe si Modo Destrucción (X) está activo
+                // - Fuera de Construcción: Caza de criaturas, faenado de presas, tala/minería/excavación con herramientas
+                // ==============================================================
                 if is_mouse_button_pressed(MouseButton::Left)
                     && !ui_res.is_mouse_over_ui
                     && !inventory_ui.is_open
@@ -1102,7 +1134,11 @@ async fn main() {
                 {
                     if is_hover_in_bounds {
                         if *is_build_mode {
-                            handle_place_block(world, player, ui_state, *build_material, hover_gx, hover_gy, destination_marker);
+                            if *is_demolish_mode {
+                                handle_harvest_demolish(world, player, ui_state, hover_gx, hover_gy, destination_marker);
+                            } else {
+                                handle_place_block(world, player, ui_state, *build_material, hover_gx, hover_gy, destination_marker);
+                            }
                         } else if let Some(c_idx) = world.find_creature_near(hover_gx, hover_gy, 1.2) {
                             let c_name = world.creatures[c_idx].kind.name();
                             let cx = world.creatures[c_idx].x;
@@ -1119,27 +1155,27 @@ async fn main() {
                                         player.inventory.remove_item(ItemType::FlintArrow, 1);
                                         let is_dead = world.creatures[c_idx].take_damage(16.0);
                                         let arrows_left = player.inventory.count_item(ItemType::FlintArrow);
-                                        ui_state.add_log(format!("🏹 Shot Flint Arrow at {} for 16 damage! (Arrows left: {})", c_name, arrows_left));
+                                        ui_state.add_log(format!("🏹 Disparo de Flecha de Sílex a {} por 16 daño! (Flechas restantes: {})", c_name, arrows_left));
                                         if is_dead {
                                             world.spawn_ground_item(ItemType::AnimalCarcass, 1, cx, cy, cz);
-                                            ui_state.add_log(format!("⚔️ Slew {}! Hunt carcass lies ready for skinning [E].", c_name));
+                                            ui_state.add_log(format!("⚔️ ¡Derrotado {}! Cadáver listo para despellejar [E].", c_name));
                                         } else {
                                             world.creature_flee(c_idx, player.x, player.y);
                                         }
                                     } else {
-                                        ui_state.add_log("Out of arrows! Craft Flint Arrows using Sticks, Flint and Grass.".to_string());
+                                        ui_state.add_log("¡Sin flechas! Craftea Flechas de Sílex en el inventario [I].".to_string());
                                     }
                                 } else {
                                     let dmg = player.get_attack_damage();
-                                    let weapon_name = player.inventory.equipment.main_hand.map(|w| w.name()).unwrap_or("Bare Hands");
+                                    let weapon_name = player.inventory.equipment.main_hand.map(|w| w.name()).unwrap_or("Puños Desnudos");
                                     let is_dead = world.creatures[c_idx].take_damage(dmg);
-                                    ui_state.add_log(format!("⚔️ Struck {} with {} for {:.0} damage!", c_name, weapon_name, dmg));
+                                    ui_state.add_log(format!("⚔️ Golpe a {} con {} por {:.0} daño!", c_name, weapon_name, dmg));
                                     if is_dead {
                                         world.spawn_ground_item(ItemType::AnimalCarcass, 1, cx, cy, cz);
-                                        ui_state.add_log(format!("⚔️ Slew {}! Hunt carcass lies ready for skinning [E].", c_name));
+                                        ui_state.add_log(format!("⚔️ ¡Derrotado {}! Cadáver listo para despellejar [E].", c_name));
                                     } else if kind == CreatureType::Boar {
                                         let dmg_taken = player.take_damage(10.0);
-                                        ui_state.add_log(format!("🐗 Enraged Boar charges and bites you! (-{:.0} HP)", dmg_taken));
+                                        ui_state.add_log(format!("🐗 ¡El jabalí enfurecido te embiste! (-{:.0} PS)", dmg_taken));
                                     } else {
                                         world.creature_flee(c_idx, player.x, player.y);
                                     }
@@ -1149,96 +1185,45 @@ async fn main() {
                                 if let Some(path) = find_path(world, (player.x, player.y), (cx, cy)) {
                                     *destination_marker = Some((cx, cy));
                                     player.set_path(path);
-                                    ui_state.add_log(format!("Hunting: stalking {} at ({}, {})...", c_name, cx, cy));
+                                    ui_state.add_log(format!("Acechando a {} en ({}, {})...", c_name, cx, cy));
                                 }
                             }
-                        } else if ((player.x - hover_gx).pow(2) as f32 + (player.y - hover_gy).pow(2) as f32).sqrt() <= 2.2
-                            && {
-                                let hz = world.get_surface_z(hover_gx, hover_gy);
-                                let t_kind = world.get_tile(hover_gx, hover_gy, hz).map(|t| t.kind).unwrap_or(TileKind::Air);
-                                ((t_kind == TileKind::TreeTrunk || t_kind == TileKind::PalmTree) && player.has_hatchet())
-                                    || ((t_kind == TileKind::Stone || t_kind == TileKind::MountainRock || t_kind == TileKind::Granite) && player.has_pickaxe())
-                                    || ((t_kind == TileKind::Soil || t_kind == TileKind::Grass || t_kind == TileKind::Sand) && player.has_shovel())
-                                    || ((t_kind == TileKind::WoodPlanks || t_kind == TileKind::Cobblestone) && (player.has_hatchet() || player.has_pickaxe()))
-                            }
-                        {
+                        } else if let Some(_carcass) = world.pickup_carcass_at(hover_gx, hover_gy, 1.8) {
+                            let has_knife = player.inventory.has_item(ItemType::FlintKnife, 1)
+                                || player.inventory.equipment.main_hand == Some(ItemType::FlintKnife);
+                            let (leather, bones, meat) = if has_knife { (3, 3, 3) } else { (1, 2, 1) };
+                            let rem_l = player.inventory.add_item(ItemType::Leather, leather);
+                            let rem_b = player.inventory.add_item(ItemType::Bone, bones);
+                            let rem_m = player.inventory.add_item(ItemType::RawMeat, meat);
+                            let hz = world.get_surface_z(hover_gx, hover_gy);
+                            if rem_l > 0 { world.spawn_ground_item(ItemType::Leather, rem_l, hover_gx, hover_gy, hz); }
+                            if rem_b > 0 { world.spawn_ground_item(ItemType::Bone, rem_b, hover_gx, hover_gy, hz); }
+                            if rem_m > 0 { world.spawn_ground_item(ItemType::RawMeat, rem_m, hover_gx, hover_gy, hz); }
+                            ui_state.add_log(format!("🔪 Despellejado cadáver: +{}x Cuero, +{}x Huesos, +{}x Carne.", leather, bones, meat));
+                        } else if {
                             let hz = world.get_surface_z(hover_gx, hover_gy);
                             let t_kind = world.get_tile(hover_gx, hover_gy, hz).map(|t| t.kind).unwrap_or(TileKind::Air);
-                            match t_kind {
-                                TileKind::TreeTrunk | TileKind::PalmTree => {
-                                    match world.chop_tree_at(hover_gx, hover_gy) {
-                                        Ok((logs, sticks)) => {
-                                            let rem_l = player.inventory.add_item(ItemType::WoodLog, logs);
-                                            let rem_s = player.inventory.add_item(ItemType::Stick, sticks);
-                                            if rem_l > 0 { world.spawn_ground_item(ItemType::WoodLog, rem_l, hover_gx, hover_gy, hz); }
-                                            if rem_s > 0 { world.spawn_ground_item(ItemType::Stick, rem_s, hover_gx, hover_gy, hz); }
-                                            player.energy = (player.energy - 6.0).max(0.0);
-                                            ui_state.add_log(format!("🪓 Chopped tree! Harvested {}x Wood Logs and {}x Sticks.", logs, sticks));
-                                        }
-                                        Err(e) => ui_state.add_log(e.to_string()),
-                                    }
-                                }
-                                TileKind::Stone | TileKind::MountainRock | TileKind::Granite | TileKind::IronOre | TileKind::CoalOre => {
-                                    match world.pickaxe_rock_at(hover_gx, hover_gy) {
-                                        Ok((item, count)) => {
-                                            let rem = player.inventory.add_item(item, count);
-                                            if rem > 0 { world.spawn_ground_item(item, rem, hover_gx, hover_gy, hz); }
-                                            player.energy = (player.energy - 7.0).max(0.0);
-                                            ui_state.add_log(format!("⛏️ Mined stone! Harvested {}x {}.", count, item.name()));
-                                        }
-                                        Err(e) => ui_state.add_log(e.to_string()),
-                                    }
-                                }
-                                TileKind::Soil | TileKind::Grass | TileKind::Sand | TileKind::TallGrass | TileKind::Wildflower | TileKind::Subsoil => {
-                                    match world.shovel_dirt_at(hover_gx, hover_gy) {
-                                        Ok(item) => {
-                                            let rem = player.inventory.add_item(item, 1);
-                                            if rem > 0 { world.spawn_ground_item(item, rem, hover_gx, hover_gy, hz); }
-                                            player.energy = (player.energy - 4.5).max(0.0);
-                                            ui_state.add_log("🚜 Shoveled earth! Excavated 1x Dirt Block (Elevation lowered).".to_string());
-                                        }
-                                        Err(e) => ui_state.add_log(e.to_string()),
-                                    }
-                                }
-                                TileKind::WoodPlanks => {
-                                    match world.demolish_at(hover_gx, hover_gy) {
-                                        Ok(item) => {
-                                            let rem = player.inventory.add_item(item, 1);
-                                            if rem > 0 { world.spawn_ground_item(item, rem, hover_gx, hover_gy, hz); }
-                                            player.energy = (player.energy - 3.0).max(0.0);
-                                            ui_state.add_log("💥 Demolished Wood Planks! Recovered 1x Wood Planks.".to_string());
-                                        }
-                                        Err(e) => ui_state.add_log(e.to_string()),
-                                    }
-                                }
-                                TileKind::Cobblestone => {
-                                    match world.demolish_at(hover_gx, hover_gy) {
-                                        Ok(item) => {
-                                            let rem = player.inventory.add_item(item, 1);
-                                            if rem > 0 { world.spawn_ground_item(item, rem, hover_gx, hover_gy, hz); }
-                                            player.energy = (player.energy - 4.0).max(0.0);
-                                            ui_state.add_log("💥 Demolished Cobblestone block! Recovered 1x Cobblestone.".to_string());
-                                        }
-                                        Err(e) => ui_state.add_log(e.to_string()),
-                                    }
-                                }
-                                _ => {}
+                            ((t_kind == TileKind::TreeTrunk || t_kind == TileKind::PalmTree) && player.has_hatchet())
+                                || ((t_kind == TileKind::Stone || t_kind == TileKind::MountainRock || t_kind == TileKind::Granite || t_kind == TileKind::IronOre || t_kind == TileKind::CoalOre) && player.has_pickaxe())
+                                || ((t_kind == TileKind::Soil || t_kind == TileKind::Grass || t_kind == TileKind::Sand || t_kind == TileKind::TallGrass || t_kind == TileKind::Wildflower || t_kind == TileKind::Subsoil) && player.has_shovel())
+                                || ((t_kind == TileKind::WoodPlanks || t_kind == TileKind::Cobblestone) && (player.has_hatchet() || player.has_pickaxe()))
+                        } {
+                            handle_harvest_demolish(world, player, ui_state, hover_gx, hover_gy, destination_marker);
+                        } else if let Some(picked) = world.pickup_item_at(hover_gx, hover_gy, 1.8) {
+                            let leftover = player.inventory.add_item(picked.item, picked.count);
+                            if leftover == 0 {
+                                ui_state.add_log(format!("Recogido {}x {} del suelo.", picked.count, picked.item.name()));
+                            } else {
+                                let hz = world.get_surface_z(hover_gx, hover_gy);
+                                world.spawn_ground_item(picked.item, leftover, hover_gx, hover_gy, hz);
+                                ui_state.add_log(format!("Recogido {}x {} (Mochila llena).", picked.count - leftover, picked.item.name()));
                             }
-                        } else if let Some(path) =
-                            find_path(world, (player.x, player.y), (hover_gx, hover_gy))
-                        {
-                            *destination_marker = Some((hover_gx, hover_gy));
-                            let steps = path.len();
-                            player.set_path(path);
-                            ui_state.add_log(format!(
-                                "Pathfinding route to ({}, {}): {} steps along terrain.",
-                                hover_gx, hover_gy, steps
-                            ));
+                        } else if player.can_drink_water(world) && ((player.x - hover_gx).pow(2) + (player.y - hover_gy).pow(2)) <= 4 {
+                            if player.drink_water(world) {
+                                ui_state.add_log("Bebiendo agua fresca. Sed saciada.".to_string());
+                            }
                         } else {
-                            ui_state.add_log(format!(
-                                "Target ({}, {}) is blocked or cliffs are too steep.",
-                                hover_gx, hover_gy
-                            ));
+                            ui_state.add_log("ℹ️ Clic Derecho SIEMPRE mueve. Clic Izquierdo realiza acciones o construye [B].".to_string());
                         }
                     }
                 }

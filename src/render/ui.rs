@@ -46,7 +46,9 @@ pub struct UiResult {
     pub clicked_build_cobble: bool,
     pub clicked_harvest_demolish: bool,
     pub clicked_toggle_build_mode: bool,
+    pub clicked_toggle_demolish: bool,
     pub clicked_select_material: Option<BuildMaterial>,
+    pub clicked_hotbar_slot: Option<usize>,
     pub is_mouse_over_ui: bool,
 }
 
@@ -58,7 +60,9 @@ pub fn render_ui(
     ui_state: &UiState,
     font: Option<&Font>,
     is_build_mode: bool,
+    is_demolish_mode: bool,
     build_material: BuildMaterial,
+    active_hotbar_slot: usize,
 ) -> UiResult {
     let screen_w = screen_width();
     let screen_h = screen_height();
@@ -86,7 +90,9 @@ pub fn render_ui(
         clicked_build_cobble: false,
         clicked_harvest_demolish: false,
         clicked_toggle_build_mode: false,
+        clicked_toggle_demolish: false,
         clicked_select_material: None,
+        clicked_hotbar_slot: None,
         is_mouse_over_ui: false,
     };
 
@@ -667,9 +673,25 @@ pub fn render_ui(
     }
     cy += 26.0;
 
-    // Botón directo de Demoler / Romper
-    if draw_ascii_button(
-        "[ 💥 ROMPER / DEMOLER (Clic Der / X) ]",
+    // Botón directo de Alternar Demoler / Colocar
+    let (dem_text, dem_bg, dem_bor, dem_txt) = if is_demolish_mode {
+        (
+            "[ 💥 MODO DESTRUCCIÓN ACTIVO (X) ]",
+            Some(Color::new(0.35, 0.12, 0.08, 0.95)),
+            Some(Color::new(1.0, 0.40, 0.20, 1.0)),
+            Some(Color::new(1.0, 0.60, 0.45, 1.0)),
+        )
+    } else {
+        (
+            "[ 🔨 MODO COLOCAR ACTIVO (X) ]",
+            Some(Color::new(0.12, 0.22, 0.16, 0.95)),
+            Some(Color::new(0.35, 0.75, 0.50, 1.0)),
+            Some(Color::new(0.80, 0.95, 0.85, 1.0)),
+        )
+    };
+
+    if draw_ascii_button_styled(
+        dem_text,
         sb_x + 12.0,
         cy,
         sidebar_w - 24.0,
@@ -678,8 +700,11 @@ pub fn render_ui(
         my,
         mouse_click,
         font,
+        dem_bg,
+        dem_bor,
+        dem_txt,
     ) {
-        result.clicked_harvest_demolish = true;
+        result.clicked_toggle_demolish = true;
     }
     cy += 26.0;
 
@@ -843,9 +868,189 @@ pub fn render_ui(
     }
 
     // ==========================================
+    // 2.5. BUILDING HOTBAR (CENTRO DEL VIEWPORT)
+    // ==========================================
+    let vp_w = screen_w - sidebar_w;
+    let foot_y = screen_h - bottom_h;
+    let hotbar_h = 42.0;
+    let hotbar_y = foot_y - hotbar_h - 6.0;
+    let slot_count = 5;
+    let slot_w = 66.0;
+    let slot_gap = 5.0;
+    let mode_btn_w = 145.0;
+    let hotbar_total_w = (slot_count as f32 * slot_w) + ((slot_count - 1) as f32 * slot_gap) + 8.0 + mode_btn_w;
+    let hotbar_x = ((vp_w - hotbar_total_w) * 0.5).max(8.0);
+
+    let is_in_hotbar = mx >= (hotbar_x - 6.0)
+        && mx <= (hotbar_x + hotbar_total_w + 6.0)
+        && my >= (hotbar_y - 4.0)
+        && my <= (hotbar_y + hotbar_h + 4.0);
+    if is_in_hotbar {
+        result.is_mouse_over_ui = true;
+    }
+
+    // Marco exterior de la Hotbar
+    draw_rectangle(
+        hotbar_x - 6.0,
+        hotbar_y - 4.0,
+        hotbar_total_w + 12.0,
+        hotbar_h + 8.0,
+        Color::new(0.04, 0.06, 0.10, 0.94),
+    );
+    draw_rectangle_lines(
+        hotbar_x - 6.0,
+        hotbar_y - 4.0,
+        hotbar_total_w + 12.0,
+        hotbar_h + 8.0,
+        1.5,
+        Color::new(0.28, 0.42, 0.60, 0.9),
+    );
+
+    // Dibujar las 5 casillas de la Hotbar
+    for i in 0..slot_count {
+        let sx = hotbar_x + i as f32 * (slot_w + slot_gap);
+        let sy = hotbar_y;
+        let is_slot_hov = mx >= sx && mx <= (sx + slot_w) && my >= sy && my <= (sy + hotbar_h);
+        let is_slot_active = i == active_hotbar_slot && is_build_mode;
+
+        if is_slot_hov && mouse_click {
+            result.clicked_hotbar_slot = Some(i);
+        }
+
+        let bg_col = if is_slot_active {
+            Color::new(0.32, 0.24, 0.10, 0.95)
+        } else if is_slot_hov {
+            Color::new(0.18, 0.25, 0.36, 0.95)
+        } else {
+            Color::new(0.08, 0.11, 0.16, 0.92)
+        };
+
+        let border_col = if is_slot_active {
+            Color::new(1.0, 0.85, 0.30, 1.0)
+        } else if is_slot_hov {
+            Color::new(0.60, 0.80, 1.0, 0.9)
+        } else {
+            Color::new(0.25, 0.35, 0.48, 0.8)
+        };
+
+        draw_rectangle(sx, sy, slot_w, hotbar_h, bg_col);
+        draw_rectangle_lines(sx, sy, slot_w, hotbar_h, if is_slot_active { 2.0 } else { 1.0 }, border_col);
+
+        // Tecla de acceso rápido [1] a [5]
+        let key_text = format!("[{}]", i + 1);
+        draw_text_ex(
+            &key_text,
+            sx + 4.0,
+            sy + 11.0,
+            TextParams {
+                font,
+                font_size: 9,
+                color: if is_slot_active { Color::new(1.0, 0.85, 0.30, 1.0) } else { Color::new(0.50, 0.65, 0.80, 0.9) },
+                ..Default::default()
+            },
+        );
+
+        // Contenido del slot
+        if let Some(item) = player.inventory.hotbar[i] {
+            let count = player.inventory.count_item(item);
+            let glyph_str = item.glyph().to_string();
+            let g_dim = measure_text(&glyph_str, font, 14, 1.0);
+            draw_text_ex(
+                &glyph_str,
+                sx + (slot_w - g_dim.width) * 0.5,
+                sy + 22.0,
+                TextParams {
+                    font,
+                    font_size: 14,
+                    color: item.color(),
+                    ..Default::default()
+                },
+            );
+
+            let short_name = match item {
+                ItemType::WoodPlanks => "Tablas",
+                ItemType::Cobblestone => "Adoquin",
+                ItemType::DirtBlock => "Tierra",
+                _ => item.name(),
+            };
+            let count_str = format!("x{}", count);
+            let c_dim = measure_text(&count_str, font, 9, 1.0);
+            draw_text_ex(
+                &count_str,
+                sx + slot_w - c_dim.width - 4.0,
+                sy + hotbar_h - 4.0,
+                TextParams {
+                    font,
+                    font_size: 9,
+                    color: if count > 0 { Color::new(0.95, 0.95, 0.95, 1.0) } else { Color::new(0.75, 0.35, 0.35, 1.0) },
+                    ..Default::default()
+                },
+            );
+
+            draw_text_ex(
+                short_name,
+                sx + 3.0,
+                sy + hotbar_h - 4.0,
+                TextParams {
+                    font,
+                    font_size: 8,
+                    color: Color::new(0.65, 0.75, 0.85, 0.8),
+                    ..Default::default()
+                },
+            );
+        } else {
+            draw_text_ex(
+                "---",
+                sx + slot_w * 0.5 - 6.0,
+                sy + 24.0,
+                TextParams {
+                    font,
+                    font_size: 10,
+                    color: Color::new(0.35, 0.40, 0.45, 0.7),
+                    ..Default::default()
+                },
+            );
+        }
+    }
+
+    // Botón de alternancia de Modo en la Hotbar: [🔨 Colocar (X)] / [💥 Demoler (X)]
+    let mode_btn_x = hotbar_x + (slot_count as f32 * (slot_w + slot_gap)) + 4.0;
+    let (mode_btn_text, mode_btn_bg, mode_btn_border, mode_btn_txt_col) = if is_demolish_mode {
+        (
+            "[💥 MODO DESTRUIR (X)]",
+            Some(Color::new(0.35, 0.12, 0.08, 0.95)),
+            Some(Color::new(1.0, 0.40, 0.20, 1.0)),
+            Some(Color::new(1.0, 0.65, 0.45, 1.0)),
+        )
+    } else {
+        (
+            "[🔨 MODO COLOCAR (X)]",
+            Some(Color::new(0.12, 0.26, 0.18, 0.95)),
+            Some(Color::new(0.40, 0.85, 0.55, 1.0)),
+            Some(Color::new(0.85, 1.0, 0.88, 1.0)),
+        )
+    };
+
+    if draw_ascii_button_styled(
+        mode_btn_text,
+        mode_btn_x,
+        hotbar_y,
+        mode_btn_w,
+        hotbar_h,
+        mx,
+        my,
+        mouse_click,
+        font,
+        mode_btn_bg,
+        mode_btn_border,
+        mode_btn_txt_col,
+    ) {
+        result.clicked_toggle_demolish = true;
+    }
+
+    // ==========================================
     // 3. ASCII FOOTER / CONTROLS HINT
     // ==========================================
-    let foot_y = screen_h - bottom_h;
     draw_rectangle(
         0.0,
         foot_y,
@@ -863,9 +1068,13 @@ pub fn render_ui(
     );
 
     let help_text = if is_build_mode {
-        "[🔨 MODO CONSTRUCCIÓN] [Clic Izq: Colocar bloque] [Clic Der: Romper/Demoler] [R: Cambiar Material] [B: Salir] [I: Inv]"
+        if is_demolish_mode {
+            "[💥 MODO DESTRUCCIÓN] [Clic Der: MOVERSE] [Clic Izq: Romper/Demoler] [X: Volver a Colocar] [1-5: Bloques] [B: Salir] [I: Inv]"
+        } else {
+            "[🔨 MODO CONSTRUCCIÓN] [Clic Der: MOVERSE] [Clic Izq: Colocar Bloque] [X: Modo Destrucción] [1-5: Bloques] [B: Salir] [I: Inv]"
+        }
     } else {
-        "[B: Modo Construcción] [Clic Izq: Mover/Ruta] [Clic Der: Pan Cámara] [E: Interact/Skin] [F: Cazar] [I: Inv]"
+        "[SUPERVIVENCIA] [Clic Der: MOVERSE (SIEMPRE)] [Clic Izq: Acción/Caza/Cosechar] [B: Construir] [I: Inv (D: Tirar)] [Tab: Radar] [F5: Guardar]"
     };
     draw_text_ex(
         help_text,
@@ -874,7 +1083,11 @@ pub fn render_ui(
         TextParams {
             font,
             font_size: 12,
-            color: if is_build_mode { Color::new(1.0, 0.85, 0.35, 1.0) } else { Color::new(0.65, 0.75, 0.85, 1.0) },
+            color: if is_build_mode {
+                if is_demolish_mode { Color::new(1.0, 0.55, 0.35, 1.0) } else { Color::new(1.0, 0.85, 0.35, 1.0) }
+            } else {
+                Color::new(0.65, 0.75, 0.85, 1.0)
+            },
             ..Default::default()
         },
     );

@@ -566,5 +566,41 @@ mod tests {
         let dem_c = world.demolish_at(tx, ty);
         assert_eq!(dem_c, Ok(ItemType::Cobblestone));
     }
+
+    #[test]
+    fn test_hotbar_slots_and_demolish_toggle() {
+        use die_by_glory::entity::{default_hotbar, BuildMaterial, Inventory, ItemType};
+
+        let mut inv = Inventory::new();
+        // 1. Verify default hotbar layout
+        assert_eq!(inv.hotbar, default_hotbar());
+        assert_eq!(inv.hotbar[0], Some(ItemType::WoodPlanks));
+        assert_eq!(inv.hotbar[1], Some(ItemType::Cobblestone));
+        assert_eq!(inv.hotbar[2], Some(ItemType::DirtBlock));
+        assert_eq!(inv.hotbar[3], None);
+        assert_eq!(inv.hotbar[4], None);
+
+        // 2. Verify mapping to BuildMaterial
+        assert_eq!(inv.get_hotbar_material(0), Some(BuildMaterial::WoodPlanks));
+        assert_eq!(inv.get_hotbar_material(1), Some(BuildMaterial::Cobblestone));
+        assert_eq!(inv.get_hotbar_material(2), Some(BuildMaterial::DirtBlock));
+        assert_eq!(inv.get_hotbar_material(3), None);
+
+        // 3. Test slot customization (assigning items from backpack)
+        inv.set_hotbar_slot(3, Some(ItemType::Torch));
+        assert_eq!(inv.hotbar[3], Some(ItemType::Torch));
+        // Torch is not a building block, so get_hotbar_material returns None
+        assert_eq!(inv.get_hotbar_material(3), None);
+
+        inv.set_hotbar_slot(0, Some(ItemType::DirtBlock));
+        assert_eq!(inv.get_hotbar_material(0), Some(BuildMaterial::DirtBlock));
+
+        // 4. Verify serde backward-compatibility
+        let json_without_hotbar = r#"{"slots":[null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null],"equipment":{"main_hand":null,"off_hand":null,"head":null,"chest":null,"legs":null},"crafting_grid":[null,null,null,null]}"#;
+        let deserialized: Inventory = serde_json::from_str(json_without_hotbar).expect("Must deserialize without hotbar field");
+        assert_eq!(deserialized.hotbar[0], Some(ItemType::WoodPlanks));
+        assert_eq!(deserialized.hotbar[1], Some(ItemType::Cobblestone));
+        assert_eq!(deserialized.hotbar[2], Some(ItemType::DirtBlock));
+    }
 }
 

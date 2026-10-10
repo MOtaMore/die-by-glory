@@ -1,7 +1,18 @@
-use crate::entity::item::{EquipSlot, ItemStack, ItemType};
+use crate::entity::item::{BuildMaterial, EquipSlot, ItemStack, ItemType};
 use serde::{Deserialize, Serialize};
 
 pub const INVENTORY_CAPACITY: usize = 20;
+pub const HOTBAR_SIZE: usize = 5;
+
+pub fn default_hotbar() -> [Option<ItemType>; 5] {
+    [
+        Some(ItemType::WoodPlanks),
+        Some(ItemType::Cobblestone),
+        Some(ItemType::DirtBlock),
+        None,
+        None,
+    ]
+}
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Equipment {
@@ -40,6 +51,8 @@ pub struct Inventory {
     pub equipment: Equipment,
     // 2x2 Minecraft style crafting grid
     pub crafting_grid: [Option<ItemStack>; 4],
+    #[serde(default = "default_hotbar")]
+    pub hotbar: [Option<ItemType>; HOTBAR_SIZE],
 }
 
 impl Inventory {
@@ -48,6 +61,21 @@ impl Inventory {
             slots: vec![None; INVENTORY_CAPACITY],
             equipment: Equipment::default(),
             crafting_grid: [None, None, None, None],
+            hotbar: default_hotbar(),
+        }
+    }
+
+    pub fn set_hotbar_slot(&mut self, slot: usize, item: Option<ItemType>) {
+        if slot < HOTBAR_SIZE {
+            self.hotbar[slot] = item;
+        }
+    }
+
+    pub fn get_hotbar_material(&self, slot: usize) -> Option<BuildMaterial> {
+        if slot < HOTBAR_SIZE {
+            self.hotbar[slot].and_then(BuildMaterial::from_item_type)
+        } else {
+            None
         }
     }
 

@@ -360,4 +360,13 @@ impl BuildMaterial {
             BuildMaterial::DirtBlock => 2,
         }
     }
+
+    pub fn from_item_type(item: ItemType) -> Option<Self> {
+        match item {
+            ItemType::WoodPlanks => Some(BuildMaterial::WoodPlanks),
+            ItemType::Cobblestone => Some(BuildMaterial::Cobblestone),
+            ItemType::DirtBlock => Some(BuildMaterial::DirtBlock),
+            _ => None,
+        }
+    }
 }

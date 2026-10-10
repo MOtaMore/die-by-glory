@@ -319,13 +319,13 @@ pub fn render_inventory_screen(
             );
 
             // Action buttons
-            let action_btn_y = detail_y + 80.0;
+            let action_btn_y = detail_y + 54.0;
             let can_equip = item.equip_slot().is_some();
             let is_carcass = item == ItemType::AnimalCarcass;
             let is_consumable = item.category() == ItemCategory::Consumable;
 
             if can_equip {
-                if draw_button("[ 🗡 EQUIP (Key E) ]", col2_x + 22.0, action_btn_y, 150.0, 26.0, mx, my, mouse_clicked, font, Color::new(0.4, 0.85, 1.0, 1.0))
+                if draw_button("[ 🗡 EQUIP (Key E) ]", col2_x + 22.0, action_btn_y, 150.0, 24.0, mx, my, mouse_clicked, font, Color::new(0.4, 0.85, 1.0, 1.0))
                     || is_key_pressed(KeyCode::E)
                 {
                     if player.inventory.equip_from_slot(s_idx) {
@@ -333,7 +333,7 @@ pub fn render_inventory_screen(
                     }
                 }
             } else if is_carcass {
-                if draw_button("[ 🔪 BUTCHER (Key E) ]", col2_x + 22.0, action_btn_y, 150.0, 26.0, mx, my, mouse_clicked, font, Color::new(0.95, 0.45, 0.45, 1.0))
+                if draw_button("[ 🔪 BUTCHER (Key E) ]", col2_x + 22.0, action_btn_y, 150.0, 24.0, mx, my, mouse_clicked, font, Color::new(0.95, 0.45, 0.45, 1.0))
                     || is_key_pressed(KeyCode::E)
                 {
                     let has_knife = player.inventory.has_item(ItemType::FlintKnife, 1)
@@ -348,7 +348,7 @@ pub fn render_inventory_screen(
                 }
             } else if is_consumable {
                 let action_name = if item == ItemType::PrimitiveBandage { "[ ➕ HEAL (Key E) ]" } else { "[ 🍖 EAT FOOD (Key E) ]" };
-                if draw_button(action_name, col2_x + 22.0, action_btn_y, 150.0, 26.0, mx, my, mouse_clicked, font, Color::new(0.5, 0.95, 0.6, 1.0))
+                if draw_button(action_name, col2_x + 22.0, action_btn_y, 150.0, 24.0, mx, my, mouse_clicked, font, Color::new(0.5, 0.95, 0.6, 1.0))
                     || is_key_pressed(KeyCode::E)
                 {
                     if item == ItemType::PrimitiveBandage {
@@ -370,13 +370,54 @@ pub fn render_inventory_screen(
             }
 
             // Drop button
-            if draw_button("[ ⬇ DROP (Key D) ]", col2_x + 180.0, action_btn_y, 160.0, 26.0, mx, my, mouse_clicked, font, Color::new(0.9, 0.6, 0.3, 1.0))
+            if draw_button("[ ⬇ DROP (Key D) ]", col2_x + 180.0, action_btn_y, 160.0, 24.0, mx, my, mouse_clicked, font, Color::new(0.9, 0.6, 0.3, 1.0))
                 || is_key_pressed(KeyCode::D)
             {
                 if let Some(dropped) = player.inventory.drop_from_slot(s_idx) {
                     world.spawn_ground_item(dropped.item, dropped.count, player.x, player.y, player.z);
                     state.set_log(format!("Dropped {} onto ground.", dropped.item.name()));
                     result.dropped_item = Some(dropped);
+                }
+            }
+
+            // Hotbar Assignment Controls
+            let hb_label_y = detail_y + 88.0;
+            draw_text_ex(
+                "🧱 ASIGNAR A HOTBAR (Haz clic o pulsa teclas 1-5):",
+                col2_x + 22.0,
+                hb_label_y,
+                TextParams { font, font_size: 11, color: Color::new(0.95, 0.80, 0.35, 1.0), ..Default::default() },
+            );
+
+            let hb_keys = [
+                (0, KeyCode::Key1),
+                (1, KeyCode::Key2),
+                (2, KeyCode::Key3),
+                (3, KeyCode::Key4),
+                (4, KeyCode::Key5),
+            ];
+            let hb_btn_y = detail_y + 102.0;
+            for (h_idx, key) in hb_keys {
+                let hx = col2_x + 22.0 + h_idx as f32 * 68.0;
+                let current_in_slot = player.inventory.hotbar[h_idx];
+                let btn_text = if let Some(ci) = current_in_slot {
+                    format!("[{}] {}", h_idx + 1, ci.glyph())
+                } else {
+                    format!("[{}] --", h_idx + 1)
+                };
+
+                let is_current = current_in_slot == Some(item);
+                let btn_col = if is_current {
+                    Color::new(0.95, 0.85, 0.30, 1.0)
+                } else {
+                    Color::new(0.50, 0.70, 0.90, 1.0)
+                };
+
+                if draw_button(&btn_text, hx, hb_btn_y, 64.0, 26.0, mx, my, mouse_clicked, font, btn_col)
+                    || is_key_pressed(key)
+                {
+                    player.inventory.set_hotbar_slot(h_idx, Some(item));
+                    state.set_log(format!("Asignado {} al Slot {} de la Hotbar.", item.name(), h_idx + 1));
                 }
             }
         } else {
@@ -392,6 +433,26 @@ pub fn render_inventory_screen(
                 detail_y + 45.0,
                 TextParams { font, font_size: 10, color: Color::new(0.40, 0.45, 0.52, 1.0), ..Default::default() },
             );
+
+            // Display current hotbar overview even when empty slot is selected
+            draw_text_ex(
+                "🧱 HOTBAR DE CONSTRUCCIÓN ACTUAL (Slots 1-5):",
+                col2_x + 24.0,
+                detail_y + 75.0,
+                TextParams { font, font_size: 11, color: Color::new(0.85, 0.75, 0.35, 1.0), ..Default::default() },
+            );
+
+            let hb_btn_y = detail_y + 92.0;
+            for h_idx in 0..5 {
+                let hx = col2_x + 24.0 + h_idx as f32 * 68.0;
+                let current_in_slot = player.inventory.hotbar[h_idx];
+                let label = if let Some(ci) = current_in_slot {
+                    format!("[{}] {}", h_idx + 1, ci.glyph())
+                } else {
+                    format!("[{}] -", h_idx + 1)
+                };
+                draw_button(&label, hx, hb_btn_y, 64.0, 24.0, mx, my, false, font, Color::new(0.40, 0.55, 0.70, 0.8));
+            }
         }
     }
 
