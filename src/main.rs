@@ -60,18 +60,35 @@ fn load_game_state(save: SaveGame) -> AppState {
     let mut ow = Overworld::new(save.overworld_seed);
     let safe_ow_x = save.ow_current_x.min(OW_WIDTH - 1);
     let safe_ow_y = save.ow_current_y.min(OW_HEIGHT - 1);
-    ow.cursor_x = safe_ow_x;
-    ow.cursor_y = safe_ow_y;
-    ow.set_station(safe_ow_x, safe_ow_y);
-    ow.visited_stations = save.discovered_regions.clone();
 
-    let mut world = World::new(save.overworld_seed, save.current_biome);
+    // Auto-recuperación: si la partida guardada tenía coordenadas en océano, reubicar a tierra continental válida
+    let (real_ow_x, real_ow_y) = ow.find_nearest_land(safe_ow_x, safe_ow_y);
+    let is_relocated = real_ow_x != safe_ow_x || real_ow_y != safe_ow_y;
+    ow.cursor_x = real_ow_x;
+    ow.cursor_y = real_ow_y;
+    ow.set_station(real_ow_x, real_ow_y);
+    ow.visited_stations = save.discovered_regions.clone();
+    if !ow.visited_stations.contains(&(real_ow_x, real_ow_y)) {
+        ow.visited_stations.push((real_ow_x, real_ow_y));
+    }
+
+    let biome = if is_relocated {
+        ow.get_tile(real_ow_x, real_ow_y).map(|t| t.biome).unwrap_or(save.current_biome)
+    } else {
+        save.current_biome
+    };
+
+    let mut world = World::new(save.overworld_seed, biome);
     world.time_of_day = save.time_of_day;
 
-    // Asegurar que el jugador reanude dentro del área jugable, lejos de los bordes que activan el Fast Travel
-    let px = save.player_x.clamp(3, MAP_WIDTH as i32 - 4);
-    let py = save.player_y.clamp(3, MAP_HEIGHT as i32 - 4);
-    let pz = world.get_surface_z(px, py);
+    let (px, py, pz) = if is_relocated {
+        world.spawn_pos
+    } else {
+        let px = save.player_x.clamp(3, MAP_WIDTH as i32 - 4);
+        let py = save.player_y.clamp(3, MAP_HEIGHT as i32 - 4);
+        let pz = world.get_surface_z(px, py);
+        (px, py, pz)
+    };
 
     let mut player = Player::new((px, py, pz));
     player.health = save.health;
@@ -84,10 +101,26 @@ fn load_game_state(save: SaveGame) -> AppState {
 
     let camera = Camera::new(player.x, player.y, player.z);
     let mut ui_state = UiState::new();
-    ui_state.add_log(format!(
-        "Resumed saved expedition at Continent (X:{}, Y:{}) in {}.",
-        save.ow_current_x, save.ow_current_y, save.current_biome.info().name
-    ));
+    if is_relocated {
+        ui_state.add_log(format!(
+            "🌊 Auto-relocated to nearest mainland station at ({}, {}) in {}.",
+            real_ow_x, real_ow_y, biome.info().name
+        ));
+        let updated_save = SaveGame::create_from_state(
+            &world,
+            &player,
+            ow.seed,
+            real_ow_x,
+            real_ow_y,
+            ow.visited_stations.clone(),
+        );
+        let _ = updated_save.save();
+    } else {
+        ui_state.add_log(format!(
+            "Resumed saved expedition at Continent (X:{}, Y:{}) in {}.",
+            save.ow_current_x, save.ow_current_y, save.current_biome.info().name
+        ));
+    }
 
     AppState::Playing {
         world,
@@ -378,7 +411,20 @@ async fn main() {
 
                     // Generar el mundo 3D de 100 capas con relieve según el bioma elegido
                     let world = World::new(seed, selected_biome);
-                    let player = Player::new(world.spawn_pos);
+                    let mut player = Player::new(world.spawn_pos);
+
+                    if *is_fast_travel {
+                        if let Some(prev_save) = SaveGame::load() {
+                            player.health = prev_save.health;
+                            player.hunger = prev_save.hunger;
+                            player.thirst = prev_save.thirst;
+                            player.energy = prev_save.energy;
+                            if let Some(inv) = prev_save.inventory {
+                                player.inventory = inv;
+                            }
+                        }
+                    }
+
                     let camera = Camera::new(player.x, player.y, player.z);
 
                     let mut ui_state = UiState::new();
@@ -599,42 +645,40 @@ async fn main() {
                         .map(|t| t.is_land)
                         .unwrap_or(false);
 
-                    if !target_is_land || (target_ow_x == overworld.cursor_x && target_ow_y == overworld.cursor_y) {
-                        // El borde da al océano o al límite del mapa continental: no salir del mapa
-                        player.cancel_movement();
-                        *destination_marker = None;
-                        player.x = player.x.clamp(2, MAP_WIDTH as i32 - 3);
-                        player.y = player.y.clamp(2, MAP_HEIGHT as i32 - 3);
-                        ui_state.add_log("🌊 Vast ocean waters stretch ahead. Cannot travel into deep sea on foot.".to_string());
-                    } else {
+                    player.cancel_movement();
+                    *destination_marker = None;
+                    player.x = player.x.clamp(2, MAP_WIDTH as i32 - 3);
+                    player.y = player.y.clamp(2, MAP_HEIGHT as i32 - 3);
+
+                    // Guardar progreso con posición segura adentro del mapa
+                    let save = SaveGame::create_from_state(
+                        world,
+                        player,
+                        overworld.seed,
+                        overworld.cursor_x,
+                        overworld.cursor_y,
+                        overworld.visited_stations.clone(),
+                    );
+                    let _ = save.save();
+
+                    if target_is_land && !(target_ow_x == overworld.cursor_x && target_ow_y == overworld.cursor_y) {
                         // Hay tierra continental adyacente: abrir Fast Travel hacia esa región
-                        player.cancel_movement();
-                        *destination_marker = None;
-                        player.x = player.x.clamp(2, MAP_WIDTH as i32 - 3);
-                        player.y = player.y.clamp(2, MAP_HEIGHT as i32 - 3);
-
-                        // Guardar progreso con posición segura adentro del mapa
-                        let save = SaveGame::create_from_state(
-                            world,
-                            player,
-                            overworld.seed,
-                            overworld.cursor_x,
-                            overworld.cursor_y,
-                            overworld.visited_stations.clone(),
-                        );
-                        let _ = save.save();
-
                         overworld.cursor_x = target_ow_x;
                         overworld.cursor_y = target_ow_y;
-
-                        let ow_clone = overworld.clone();
-                        app_state = AppState::WorldSelect {
-                            overworld: ow_clone,
-                            is_fast_travel: true,
-                        };
-                        next_frame().await;
-                        continue;
+                    } else {
+                        // El borde da al océano o límite: expedición marítima a tierra más cercana
+                        let (nearest_lx, nearest_ly) = overworld.find_nearest_land(target_ow_x, target_ow_y);
+                        overworld.cursor_x = nearest_lx;
+                        overworld.cursor_y = nearest_ly;
                     }
+
+                    let ow_clone = overworld.clone();
+                    app_state = AppState::WorldSelect {
+                        overworld: ow_clone,
+                        is_fast_travel: true,
+                    };
+                    next_frame().await;
+                    continue;
                 } else if trigger_manual {
                     // Activación manual desde tecla M o botón de Fast Travel
                     player.cancel_movement();

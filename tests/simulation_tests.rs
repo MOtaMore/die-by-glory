@@ -64,6 +64,21 @@ mod tests {
     }
 
     #[test]
+    fn test_recovery_from_ocean_save() {
+        let ow = Overworld::new(42);
+        let (lx, ly) = ow.find_nearest_land(25, 18);
+        let tile = ow.get_tile(lx, ly).expect("Land tile must exist");
+        assert!(tile.is_land, "Must find a solid land tile");
+        assert_ne!(tile.biome, BiomeKind::Ocean, "Biome must not be ocean");
+
+        // Verify can_embark_at from recovered land
+        let mut test_ow = ow.clone();
+        test_ow.set_station(lx, ly);
+        let (can_embark, reason) = test_ow.can_embark_at(lx, ly, true);
+        assert!(can_embark, "Must be able to embark at recovered location: {}", reason);
+    }
+
+    #[test]
     fn test_continental_adjacent_restrictions() {
         let mut ow = Overworld::new(888);
         ow.set_station(30, 20);
@@ -93,11 +108,12 @@ mod tests {
         player.health = 85.0;
         player.hunger = 70.0;
 
+        let test_path = "target/test_savegame.json";
         let save = SaveGame::create_from_state(&world, &player, 42, 25, 18, vec![(25, 18)]);
-        let res = save.save();
+        let res = save.save_to_path(test_path);
         assert!(res.is_ok(), "SaveGame must serialize to disk successfully");
 
-        let loaded = SaveGame::load();
+        let loaded = SaveGame::load_from_path(test_path);
         assert!(loaded.is_some(), "SaveGame must load from disk");
         let l = loaded.unwrap();
         assert_eq!(l.overworld_seed, 42);
@@ -108,6 +124,8 @@ mod tests {
         assert!(l.inventory.is_some(), "Inventory must be serialized and loaded");
         let inv = l.inventory.unwrap();
         assert_eq!(inv.slots.len(), 20);
+
+        let _ = std::fs::remove_file(test_path);
     }
 
     #[test]

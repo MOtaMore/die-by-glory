@@ -176,6 +176,54 @@ impl Overworld {
         false
     }
 
+    pub fn is_coastal_or_island_station(&self, sx: usize, sy: usize) -> bool {
+        for dy in -1..=1 {
+            for dx in -1..=1 {
+                let nx = sx as i32 + dx;
+                let ny = sy as i32 + dy;
+                if nx < 0 || nx >= OW_WIDTH as i32 || ny < 0 || ny >= OW_HEIGHT as i32 {
+                    return true;
+                }
+                if let Some(t) = self.get_tile(nx as usize, ny as usize) {
+                    if !t.is_land || t.biome == BiomeKind::Ocean {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
+    }
+
+    #[allow(dead_code)]
+    pub fn is_island_station(&self, sx: usize, sy: usize) -> bool {
+        self.is_coastal_or_island_station(sx, sy)
+    }
+
+    pub fn find_nearest_land(&self, start_x: usize, start_y: usize) -> (usize, usize) {
+        if let Some(t) = self.get_tile(start_x, start_y) {
+            if t.is_land {
+                return (start_x, start_y);
+            }
+        }
+
+        let mut best_coord = (self.cursor_x, self.cursor_y);
+        let mut min_dist = f32::MAX;
+        for y in 0..OW_HEIGHT {
+            for x in 0..OW_WIDTH {
+                if let Some(t) = self.get_tile(x, y) {
+                    if t.is_land {
+                        let d = ((x as f32 - start_x as f32).powi(2) + (y as f32 - start_y as f32).powi(2)).sqrt();
+                        if d < min_dist {
+                            min_dist = d;
+                            best_coord = (x, y);
+                        }
+                    }
+                }
+            }
+        }
+        best_coord
+    }
+
     pub fn can_embark_at(&self, target_x: usize, target_y: usize, is_fast_travel: bool) -> (bool, &'static str) {
         let is_land = self.get_tile(target_x, target_y).map(|t| t.is_land).unwrap_or(false);
         if !is_land {
@@ -188,6 +236,11 @@ impl Overworld {
 
         match self.current_station {
             Some((sx, sy)) => {
+                let current_is_land = self.get_tile(sx, sy).map(|t| t.is_land).unwrap_or(false);
+                if !current_is_land {
+                    return (true, "Rescue expedition: relocate from ocean waters to mainland.");
+                }
+
                 if target_x == sx && target_y == sy {
                     return (true, "Current local camp: re-enter this area.");
                 }
@@ -200,9 +253,9 @@ impl Overworld {
                     return (true, "Known station: travel to visited camp.");
                 }
 
-                // Si la estación actual es una isla aislada sin tierra vecina, permitir viaje marítimo al continente
-                if !self.station_has_adjacent_land(sx, sy) {
-                    return (true, "Coastal expedition: sea voyage from isolated island to mainland.");
+                // Si la estación actual es una isla o costa, permitir expedición marítima al continente
+                if !self.station_has_adjacent_land(sx, sy) || self.is_coastal_or_island_station(sx, sy) {
+                    return (true, "Coastal expedition: sea voyage from island/coast to mainland.");
                 }
 
                 (false, "Too far: you can only travel to adjacent regions or visited camps!")

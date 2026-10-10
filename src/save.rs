@@ -76,12 +76,17 @@ impl SaveGame {
     }
 
     pub fn save(&self) -> Result<(), String> {
+        self.save_to_path(SAVE_FILENAME)
+    }
+
+    #[allow(unused_variables)]
+    pub fn save_to_path(&self, path: &str) -> Result<(), String> {
         let json_str = serde_json::to_string_pretty(self)
             .map_err(|e| format!("Failed to serialize savegame: {}", e))?;
 
         #[cfg(not(target_arch = "wasm32"))]
         {
-            fs::write(SAVE_FILENAME, json_str)
+            fs::write(path, json_str)
                 .map_err(|e| format!("Failed to write savegame file: {}", e))?;
             Ok(())
         }
@@ -97,12 +102,17 @@ impl SaveGame {
     }
 
     pub fn load() -> Option<Self> {
+        Self::load_from_path(SAVE_FILENAME)
+    }
+
+    #[allow(unused_variables)]
+    pub fn load_from_path(path: &str) -> Option<Self> {
         #[cfg(not(target_arch = "wasm32"))]
         {
-            if !Path::new(SAVE_FILENAME).exists() {
+            if !Path::new(path).exists() {
                 return None;
             }
-            let content = fs::read_to_string(SAVE_FILENAME).ok()?;
+            let content = fs::read_to_string(path).ok()?;
             serde_json::from_str(&content).ok()
         }
 
