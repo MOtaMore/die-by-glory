@@ -43,13 +43,13 @@ pub fn render_radar_hud(
         (
             text,
             Color::new(0.35 * pulse, 0.95 * pulse, 0.65 * pulse, 1.0),
-            Color::new(0.08, 0.16, 0.12, 0.92),
+            Color::new(0.08, 0.16, 0.12, 1.0),
         )
     } else {
         (
             "📡 RADAR: SCANNING (No targets)".to_string(),
             Color::new(0.55, 0.65, 0.75, 0.85),
-            Color::new(0.06, 0.08, 0.12, 0.85),
+            Color::new(0.06, 0.08, 0.12, 1.0),
         )
     };
 
@@ -108,7 +108,7 @@ pub fn render_radar_hud(
     let win_y = top_y + badge_h + 6.0;
 
     // Window background & borders
-    draw_rectangle(hud_x, win_y, win_w, win_h, Color::new(0.04, 0.06, 0.09, 0.92));
+    draw_rectangle(hud_x, win_y, win_w, win_h, Color::new(0.04, 0.06, 0.09, 1.0));
     draw_rectangle_lines(hud_x, win_y, win_w, win_h, 1.5, Color::new(0.28, 0.45, 0.65, 0.95));
 
     let mut py = win_y + 16.0;

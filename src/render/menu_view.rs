@@ -145,10 +145,15 @@ pub fn render_main_menu(
     // =========================================================================
     // 4. MAIN MENU TERMINAL CARD (ASCII Centered Panel)
     // =========================================================================
+    let is_compact = sh < 700.0;
     let card_w = 760.0f32.min(sw - 36.0);
-    let card_h = 570.0f32.min(sh - 70.0);
+    let card_h = if is_compact {
+        (sh - 48.0).min(560.0).max(430.0)
+    } else {
+        570.0f32.min(sh - 70.0)
+    };
     let card_x = (sw - card_w) * 0.5;
-    let card_y = 36.0 + (sh - 64.0 - card_h) * 0.5;
+    let card_y = 28.0 + ((sh - 56.0 - card_h).max(0.0) * 0.5);
 
     // Card background fill with rich dark slate glassmorphism
     draw_rectangle(card_x, card_y, card_w, card_h, Color::new(0.04, 0.05, 0.08, 0.90));
@@ -157,7 +162,7 @@ pub fn render_main_menu(
     // Inner accent line
     draw_rectangle_lines(card_x + 3.0, card_y + 3.0, card_w - 6.0, card_h - 6.0, 1.0, Color::new(0.18, 0.28, 0.42, 0.75));
 
-    let mut cy = card_y + 18.0;
+    let mut cy = card_y + if is_compact { 12.0 } else { 18.0 };
 
     // --- ASCII TITLE LOGO ---
     let logo_lines = [
@@ -171,9 +176,11 @@ pub fn render_main_menu(
     // Pulsing subtle glow
     let glow_pulse = (time * 2.0).sin() * 0.08;
     let title_color = Color::new(1.0, 0.85 + glow_pulse, 0.30 + glow_pulse, 1.0);
+    let logo_font_size = if is_compact { 10 } else { 12 };
+    let logo_line_h = if is_compact { 12.0 } else { 14.0 };
 
     for line in &logo_lines {
-        let dim = measure_text(line, font, 12, 1.0);
+        let dim = measure_text(line, font, logo_font_size, 1.0);
         let lx = card_x + (card_w - dim.width) * 0.5;
         // Subtle drop shadow
         draw_text_ex(
@@ -182,7 +189,7 @@ pub fn render_main_menu(
             cy + 1.0,
             TextParams {
                 font,
-                font_size: 12,
+                font_size: logo_font_size,
                 color: Color::new(0.0, 0.0, 0.0, 0.8),
                 ..Default::default()
             },
@@ -193,15 +200,15 @@ pub fn render_main_menu(
             cy,
             TextParams {
                 font,
-                font_size: 12,
+                font_size: logo_font_size,
                 color: title_color,
                 ..Default::default()
             },
         );
-        cy += 14.0;
+        cy += logo_line_h;
     }
 
-    cy += 6.0;
+    cy += if is_compact { 4.0 } else { 6.0 };
     let subtitle = ":: 100-LAYER VOXEL SURVIVAL :: 3D TERRAIN RELIEF :: OVERWORLD CONTINENTS ::";
     let sub_dim = measure_text(subtitle, font, 11, 1.0);
     draw_text_ex(
@@ -215,17 +222,18 @@ pub fn render_main_menu(
             ..Default::default()
         },
     );
-    cy += 14.0;
+    cy += if is_compact { 10.0 } else { 14.0 };
 
     // Horizontal separator
     draw_line(card_x + 20.0, cy, card_x + card_w - 20.0, cy, 1.0, Color::new(0.25, 0.38, 0.52, 0.8));
-    cy += 16.0;
+    cy += if is_compact { 10.0 } else { 16.0 };
 
     // =========================================================================
     // 5. INTERACTIVE MENU BUTTONS
     // =========================================================================
     let btn_w = card_w - 60.0;
-    let btn_h = 44.0;
+    let btn_h = if is_compact { 38.0 } else { 44.0 };
+    let btn_gap = if is_compact { 6.0 } else { 10.0 };
     let btn_x = card_x + 30.0;
 
     // --- BUTTON 0: NEW GAME ---
@@ -250,7 +258,7 @@ pub fn render_main_menu(
     if b0_clicked {
         return MenuAction::NewGame;
     }
-    cy += btn_h + 10.0;
+    cy += btn_h + btn_gap;
 
     // --- BUTTON 1: LOAD GAME ---
     let b1_active = state.selected_index == 1;
@@ -292,7 +300,7 @@ pub fn render_main_menu(
     if b1_clicked && has_save {
         return MenuAction::LoadGame;
     }
-    cy += btn_h + 10.0;
+    cy += btn_h + btn_gap;
 
     // --- BUTTON 2: EXIT GAME ---
     let b2_active = state.selected_index == 2;
@@ -316,7 +324,7 @@ pub fn render_main_menu(
     if b2_clicked {
         return MenuAction::Exit;
     }
-    cy += btn_h + 14.0;
+    cy += btn_h + btn_gap + 4.0;
 
     // =========================================================================
     // 6. DETECTED SAVE EXPEDITION DOSSIER CARD (If available)

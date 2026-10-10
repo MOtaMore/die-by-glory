@@ -9,6 +9,7 @@ pub struct OverworldViewResult {
     pub regenerate: bool,
     pub load_saved_game: bool,
     pub return_to_main_menu: bool,
+    pub exit_to_main_menu_force: bool,
 }
 
 pub fn render_overworld_screen(
@@ -29,6 +30,7 @@ pub fn render_overworld_screen(
         regenerate: false,
         load_saved_game: false,
         return_to_main_menu: false,
+        exit_to_main_menu_force: false,
     };
 
     let mouse_pos = mouse_position();
@@ -60,10 +62,23 @@ pub fn render_overworld_screen(
     // ==========================================
     // 2. OVERWORLD ASCII MAP
     // ==========================================
-    let map_start_x = 24.0;
-    let map_start_y = 80.0;
-    let cell_w = 12.0;
-    let cell_h = 17.0;
+    let map_start_x = 16.0f32;
+    let map_start_y = 74.0f32;
+
+    // Minimum panel width to comfortably show all text, biome buttons & embark
+    let min_panel_w = 310.0f32;
+    // Calculate available width for the map
+    let avail_map_w = (screen_w - min_panel_w - 44.0).max(320.0);
+    let max_cell_w = (avail_map_w / OW_WIDTH as f32).min(12.0);
+
+    // Calculate available height for the map
+    let avail_map_h = (screen_h - map_start_y - 36.0).max(240.0);
+    let max_cell_h = (avail_map_h / OW_HEIGHT as f32).min(17.0);
+
+    // Maintain monospace font aspect ratio (approx 1 : 1.45)
+    let cell_h = max_cell_h.min(max_cell_w * 1.45).max(7.0);
+    let cell_w = (cell_h / 1.45).max(5.0);
+    let font_size = (cell_h * 0.82).round().clamp(8.0, 14.0) as u16;
 
     let map_pixel_w = OW_WIDTH as f32 * cell_w;
     let map_pixel_h = OW_HEIGHT as f32 * cell_h;
@@ -134,7 +149,7 @@ pub fn render_overworld_screen(
                 };
 
                 let char_str = glyph.to_string();
-                let text_dim = measure_text(&char_str, font, 14, 1.0);
+                let text_dim = measure_text(&char_str, font, font_size, 1.0);
                 let tx = px + (cell_w - text_dim.width) * 0.5;
                 let ty = py + (cell_h + text_dim.height * 0.70) * 0.5;
 
@@ -144,7 +159,7 @@ pub fn render_overworld_screen(
                     ty,
                     TextParams {
                         font,
-                        font_size: 14,
+                        font_size,
                         color: fg,
                         ..Default::default()
                     },
@@ -156,8 +171,8 @@ pub fn render_overworld_screen(
     // ==========================================
     // 3. ASCII SIDE PANEL (INSPECTOR & CONTROLS)
     // ==========================================
-    let panel_x = map_start_x + map_pixel_w + 24.0;
-    let panel_w = screen_w - panel_x - 24.0;
+    let panel_x = map_start_x + map_pixel_w + 16.0;
+    let panel_w = (screen_w - panel_x - 16.0).max(280.0);
     let mut py = map_start_y;
 
     let selected_tile = ow.current_selected_tile();
@@ -167,17 +182,20 @@ pub fn render_overworld_screen(
 
     let (can_embark, embark_reason) = ow.can_embark_at(ow.cursor_x, ow.cursor_y, is_fast_travel);
 
+    let is_compact = screen_h < 720.0;
+    let insp_box_h = if is_compact { 110.0 } else { 135.0 };
+
     // Inspector Box
-    draw_ascii_box("SELECTED REGION", panel_x, py, panel_w, 160.0, font);
-    py += 24.0;
+    draw_ascii_box("SELECTED REGION", panel_x, py, panel_w, insp_box_h, font);
+    py += 20.0;
 
     let coord_str = format!("Coordinates: X: {:02} | Y: {:02}", ow.cursor_x, ow.cursor_y);
-    draw_ascii_line(&coord_str, panel_x + 12.0, py, Color::new(0.8, 0.85, 0.9, 1.0), font, 13);
-    py += 20.0;
+    draw_ascii_line(&coord_str, panel_x + 12.0, py, Color::new(0.8, 0.85, 0.9, 1.0), font, 12);
+    py += 18.0;
 
     let biome_str = format!("Biome: {} [{}]", biome_info.name, biome_info.glyph);
-    draw_ascii_line(&biome_str, panel_x + 12.0, py, biome_info.ambient_color, font, 14);
-    py += 20.0;
+    draw_ascii_line(&biome_str, panel_x + 12.0, py, biome_info.ambient_color, font, 13);
+    py += 18.0;
 
     // Movement adjacency status
     let status_col = if can_embark {
@@ -186,64 +204,69 @@ pub fn render_overworld_screen(
         Color::new(0.95, 0.35, 0.35, 1.0)
     };
     draw_ascii_line(embark_reason, panel_x + 12.0, py, status_col, font, 11);
-    py += 22.0;
+    py += 18.0;
 
     draw_ascii_line(biome_info.description, panel_x + 12.0, py, Color::new(0.7, 0.75, 0.8, 1.0), font, 11);
-    py += 80.0;
+    py = map_start_y + insp_box_h + 10.0;
+
+    let btn_h = if is_compact { 20.0 } else { 22.0 };
+    let btn_gap = if is_compact { 22.0 } else { 25.0 };
 
     // Fast travel or Quick Biome box
     if is_fast_travel {
-        draw_ascii_box("FAST TRAVEL RULES", panel_x, py, panel_w, 110.0, font);
-        py += 24.0;
+        let ft_h = if is_compact { 90.0 } else { 105.0 };
+        draw_ascii_box("FAST TRAVEL RULES", panel_x, py, panel_w, ft_h, font);
+        py += 20.0;
 
         let rule1 = "> Base Station: [@]";
         let rule2 = "> Valid Targets: adjacent neighboring cells";
         let rule3 = "> Embarking sets your NEW continental origin!";
-        draw_ascii_line(rule1, panel_x + 12.0, py, Color::new(0.4, 0.8, 1.0, 1.0), font, 12);
-        py += 20.0;
+        draw_ascii_line(rule1, panel_x + 12.0, py, Color::new(0.4, 0.8, 1.0, 1.0), font, 11);
+        py += 18.0;
         draw_ascii_line(rule2, panel_x + 12.0, py, Color::new(0.3, 0.9, 0.5, 1.0), font, 11);
-        py += 20.0;
+        py += 18.0;
         draw_ascii_line(rule3, panel_x + 12.0, py, Color::new(0.9, 0.85, 0.4, 1.0), font, 11);
-        py += 40.0;
+        py += 26.0;
     } else {
-        draw_ascii_box("QUICK BIOME SELECT", panel_x, py, panel_w, 190.0, font);
-        py += 24.0;
+        let qb_h = if is_compact { 152.0 } else { 175.0 };
+        draw_ascii_box("QUICK BIOME SELECT", panel_x, py, panel_w, qb_h, font);
+        py += 20.0;
 
-        if draw_ascii_button("[1] Meadow (Open Grass)", panel_x + 12.0, py, panel_w - 24.0, 22.0, mx, my, mouse_clicked, font)
+        if draw_ascii_button("[1] Meadow (Open Grass)", panel_x + 12.0, py, panel_w - 24.0, btn_h, mx, my, mouse_clicked, font)
             || is_key_pressed(KeyCode::Key1) {
             ow.select_first_biome(BiomeKind::Meadow);
         }
-        py += 26.0;
+        py += btn_gap;
 
-        if draw_ascii_button("[2] Ancient Forest (Oaks)", panel_x + 12.0, py, panel_w - 24.0, 22.0, mx, my, mouse_clicked, font)
+        if draw_ascii_button("[2] Ancient Forest (Oaks)", panel_x + 12.0, py, panel_w - 24.0, btn_h, mx, my, mouse_clicked, font)
             || is_key_pressed(KeyCode::Key2) {
             ow.select_first_biome(BiomeKind::Forest);
         }
-        py += 26.0;
+        py += btn_gap;
 
-        if draw_ascii_button("[3] Rugged Mountains (Peaks)", panel_x + 12.0, py, panel_w - 24.0, 22.0, mx, my, mouse_clicked, font)
+        if draw_ascii_button("[3] Rugged Mountains (Peaks)", panel_x + 12.0, py, panel_w - 24.0, btn_h, mx, my, mouse_clicked, font)
             || is_key_pressed(KeyCode::Key3) {
             ow.select_first_biome(BiomeKind::Mountain);
         }
-        py += 26.0;
+        py += btn_gap;
 
-        if draw_ascii_button("[4] Sunscorched Desert (Dunes)", panel_x + 12.0, py, panel_w - 24.0, 22.0, mx, my, mouse_clicked, font)
+        if draw_ascii_button("[4] Sunscorched Desert (Dunes)", panel_x + 12.0, py, panel_w - 24.0, btn_h, mx, my, mouse_clicked, font)
             || is_key_pressed(KeyCode::Key4) {
             ow.select_first_biome(BiomeKind::Desert);
         }
-        py += 26.0;
+        py += btn_gap;
 
-        if draw_ascii_button("[5] Coastal Beach (Shores)", panel_x + 12.0, py, panel_w - 24.0, 22.0, mx, my, mouse_clicked, font)
+        if draw_ascii_button("[5] Coastal Beach (Shores)", panel_x + 12.0, py, panel_w - 24.0, btn_h, mx, my, mouse_clicked, font)
             || is_key_pressed(KeyCode::Key5) {
             ow.select_first_biome(BiomeKind::Beach);
         }
-        py += 26.0;
+        py += btn_gap;
 
-        if draw_ascii_button("[6] Crystal River Valley", panel_x + 12.0, py, panel_w - 24.0, 22.0, mx, my, mouse_clicked, font)
+        if draw_ascii_button("[6] Crystal River Valley", panel_x + 12.0, py, panel_w - 24.0, btn_h, mx, my, mouse_clicked, font)
             || is_key_pressed(KeyCode::Key6) {
             ow.select_first_biome(BiomeKind::River);
         }
-        py += 36.0;
+        py += btn_gap + 4.0;
     }
 
     // Load Game option if savegame exists and not in fast travel
@@ -253,7 +276,7 @@ pub fn render_overworld_screen(
             panel_x + 12.0,
             py,
             panel_w - 24.0,
-            26.0,
+            btn_h,
             mx,
             my,
             mouse_clicked,
@@ -261,31 +284,37 @@ pub fn render_overworld_screen(
         ) || is_key_pressed(KeyCode::L) {
             result.load_saved_game = true;
         }
-        py += 32.0;
+        py += btn_gap + 2.0;
     }
 
     // Regenerate button (only in new game mode)
     if !is_fast_travel {
-        if draw_ascii_button("[R] Regenerate Continents", panel_x + 12.0, py, panel_w - 24.0, 22.0, mx, my, mouse_clicked, font)
+        if draw_ascii_button("[R] Regenerate Continents", panel_x + 12.0, py, panel_w - 24.0, btn_h, mx, my, mouse_clicked, font)
             || is_key_pressed(KeyCode::R) {
             result.regenerate = true;
         }
-        py += 26.0;
+        py += btn_gap;
 
-        if draw_ascii_button("[ESC] Return to Main Menu", panel_x + 12.0, py, panel_w - 24.0, 22.0, mx, my, mouse_clicked, font)
+        if draw_ascii_button("[ESC] Return to Main Menu", panel_x + 12.0, py, panel_w - 24.0, btn_h, mx, my, mouse_clicked, font)
             || is_key_pressed(KeyCode::Escape) {
             result.return_to_main_menu = true;
         }
-        py += 30.0;
+        py += btn_gap + 4.0;
     } else {
-        if draw_ascii_button("[ESC / M] Cancel Fast Travel", panel_x + 12.0, py, panel_w - 24.0, 22.0, mx, my, mouse_clicked, font)
-            || is_key_pressed(KeyCode::Escape) {
+        if draw_ascii_button("[ESC / M] Cancel & Return to Camp", panel_x + 12.0, py, panel_w - 24.0, btn_h, mx, my, mouse_clicked, font)
+            || is_key_pressed(KeyCode::Escape) || is_key_pressed(KeyCode::M) {
             result.return_to_main_menu = true;
         }
-        py += 30.0;
+        py += btn_gap;
+
+        if draw_ascii_button("[ 🚪 EXIT TO MAIN MENU ]", panel_x + 12.0, py, panel_w - 24.0, btn_h, mx, my, mouse_clicked, font) {
+            result.exit_to_main_menu_force = true;
+        }
+        py += btn_gap + 4.0;
     }
 
     // EMBARK BUTTON
+    let embark_h = if is_compact { 28.0 } else { 34.0 };
     let embark_text = if can_embark {
         "=== [ ENTER / SPACE : EMBARK HERE ] ==="
     } else {
@@ -298,7 +327,7 @@ pub fn render_overworld_screen(
             panel_x + 12.0,
             py,
             panel_w - 24.0,
-            34.0,
+            embark_h,
             mx,
             my,
             mouse_clicked,
@@ -306,13 +335,13 @@ pub fn render_overworld_screen(
         )
     } else {
         // Disabled button style
-        draw_rectangle(panel_x + 12.0, py, panel_w - 24.0, 34.0, Color::new(0.12, 0.12, 0.15, 1.0));
-        draw_rectangle_lines(panel_x + 12.0, py, panel_w - 24.0, 34.0, 1.0, Color::new(0.3, 0.3, 0.35, 1.0));
+        draw_rectangle(panel_x + 12.0, py, panel_w - 24.0, embark_h, Color::new(0.12, 0.12, 0.15, 1.0));
+        draw_rectangle_lines(panel_x + 12.0, py, panel_w - 24.0, embark_h, 1.0, Color::new(0.3, 0.3, 0.35, 1.0));
         let dim = measure_text(embark_text, font, 11, 1.0);
         draw_text_ex(
             embark_text,
             panel_x + 12.0 + (panel_w - 24.0 - dim.width) * 0.5,
-            py + (34.0 + dim.height * 0.7) * 0.5,
+            py + (embark_h + dim.height * 0.7) * 0.5,
             TextParams {
                 font,
                 font_size: 11,

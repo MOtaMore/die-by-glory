@@ -1,5 +1,5 @@
 use crate::camera::Camera;
-use crate::entity::Player;
+use crate::entity::{BuildMaterial, ItemType, Player};
 use crate::world::tile::Tile;
 use crate::world::{World, Z_MIN, Z_SURFACE};
 use macroquad::prelude::*;
@@ -45,6 +45,8 @@ pub struct UiResult {
     pub clicked_build_planks: bool,
     pub clicked_build_cobble: bool,
     pub clicked_harvest_demolish: bool,
+    pub clicked_toggle_build_mode: bool,
+    pub clicked_select_material: Option<BuildMaterial>,
     pub is_mouse_over_ui: bool,
 }
 
@@ -55,6 +57,8 @@ pub fn render_ui(
     hover_tile: Option<(i32, i32, i32, &Tile)>,
     ui_state: &UiState,
     font: Option<&Font>,
+    is_build_mode: bool,
+    build_material: BuildMaterial,
 ) -> UiResult {
     let screen_w = screen_width();
     let screen_h = screen_height();
@@ -81,6 +85,8 @@ pub fn render_ui(
         clicked_build_planks: false,
         clicked_build_cobble: false,
         clicked_harvest_demolish: false,
+        clicked_toggle_build_mode: false,
+        clicked_select_material: None,
         is_mouse_over_ui: false,
     };
 
@@ -99,7 +105,7 @@ pub fn render_ui(
         0.0,
         screen_w,
         top_h,
-        Color::new(0.06, 0.08, 0.11, 0.98),
+        Color::new(0.06, 0.08, 0.11, 1.0),
     );
     draw_line(
         0.0,
@@ -163,10 +169,50 @@ pub fn render_ui(
     let sb_x = screen_w - sidebar_w;
     let menu_btn_w = 85.0;
     let save_btn_w = 95.0;
-    let inv_btn_w = 125.0;
+    let inv_btn_w = 120.0;
+    let build_btn_w = 135.0;
     let menu_btn_x = sb_x - 12.0 - menu_btn_w;
     let save_btn_x = menu_btn_x - 8.0 - save_btn_w;
     let inv_btn_x = save_btn_x - 8.0 - inv_btn_w;
+    let build_top_btn_x = inv_btn_x - 8.0 - build_btn_w;
+
+    let build_top_text = if is_build_mode {
+        "[ 🔨 BUILD: ON (B) ]"
+    } else {
+        "[ 🔨 BUILD (B) ]"
+    };
+    let build_bg = if is_build_mode {
+        Some(Color::new(0.35, 0.22, 0.05, 0.95))
+    } else {
+        None
+    };
+    let build_border = if is_build_mode {
+        Some(Color::new(1.0, 0.85, 0.20, 1.0))
+    } else {
+        None
+    };
+    let build_text_col = if is_build_mode {
+        Some(Color::new(1.0, 0.95, 0.40, 1.0))
+    } else {
+        None
+    };
+
+    if draw_ascii_button_styled(
+        build_top_text,
+        build_top_btn_x,
+        6.0,
+        build_btn_w,
+        25.0,
+        mx,
+        my,
+        mouse_click,
+        font,
+        build_bg,
+        build_border,
+        build_text_col,
+    ) {
+        result.clicked_toggle_build_mode = true;
+    }
 
     if draw_ascii_button(
         "[ 🎒 INVENTORY (I) ]",
@@ -210,6 +256,32 @@ pub fn render_ui(
         result.clicked_exit_to_menu = true;
     }
 
+    // Floating blueprint HUD banner below header when Build Mode is active
+    if is_build_mode {
+        let mat_count = player.inventory.count_item(build_material.item_type());
+        let banner_w = (screen_w - sidebar_w - 24.0).min(640.0);
+        let banner_h = 24.0;
+        let banner_x = 12.0;
+        let banner_y = top_h + 6.0;
+        draw_rectangle(banner_x, banner_y, banner_w, banner_h, Color::new(0.08, 0.07, 0.03, 0.94));
+        draw_rectangle_lines(banner_x, banner_y, banner_w, banner_h, 1.5, Color::new(1.0, 0.80, 0.20, 1.0));
+        let banner_str = format!(
+            "🔨 MODO CONSTRUCCIÓN :: [{}] {} (x{}) | Clic Izq: Poner | Clic Der: Romper | R: Cambiar",
+            build_material.glyph(), build_material.name_es(), mat_count
+        );
+        draw_text_ex(
+            &banner_str,
+            banner_x + 8.0,
+            banner_y + 16.0,
+            TextParams {
+                font,
+                font_size: 11,
+                color: Color::new(1.0, 0.90, 0.40, 1.0),
+                ..Default::default()
+            },
+        );
+    }
+
     // ==========================================
     // 2. ASCII SIDEBAR
     // ==========================================
@@ -218,7 +290,7 @@ pub fn render_ui(
         top_h,
         sidebar_w,
         screen_h - top_h - bottom_h,
-        Color::new(0.05, 0.07, 0.10, 0.97),
+        Color::new(0.05, 0.07, 0.10, 1.0),
     );
     draw_line(
         sb_x,
@@ -477,10 +549,72 @@ pub fn render_ui(
     }
     cy += 26.0;
 
-    // Building & Harvesting/Demolishing row
+    // --- CONSTRUCCIÓN: MODO CONSTRUCCIÓN Y MATERIALES ---
+    let b_btn_text = if is_build_mode {
+        "[ 🔨 MODO CONSTRUCCIÓN: ACTIVO (B) ]"
+    } else {
+        "[ 🔨 MODO CONSTRUCCIÓN (Tecla B) ]"
+    };
+    let b_btn_bg = if is_build_mode {
+        Some(Color::new(0.35, 0.22, 0.05, 0.95))
+    } else {
+        None
+    };
+    let b_btn_border = if is_build_mode {
+        Some(Color::new(1.0, 0.85, 0.20, 1.0))
+    } else {
+        None
+    };
+    let b_btn_txt_col = if is_build_mode {
+        Some(Color::new(1.0, 0.95, 0.40, 1.0))
+    } else {
+        None
+    };
+
+    if draw_ascii_button_styled(
+        b_btn_text,
+        sb_x + 12.0,
+        cy,
+        sidebar_w - 24.0,
+        24.0,
+        mx,
+        my,
+        mouse_click,
+        font,
+        b_btn_bg,
+        b_btn_border,
+        b_btn_txt_col,
+    ) {
+        result.clicked_toggle_build_mode = true;
+    }
+    cy += 28.0;
+
+    // Selector de materiales con cantidades disponibles
+    let planks_count = player.inventory.count_item(ItemType::WoodPlanks);
+    let cobble_count = player.inventory.count_item(ItemType::Cobblestone);
+    let dirt_count = player.inventory.count_item(ItemType::DirtBlock);
+
     let third_w = (sidebar_w - 36.0) / 3.0;
-    if draw_ascii_button(
-        "[🧱PLANK (C)]",
+
+    let p_sel = is_build_mode && build_material == BuildMaterial::WoodPlanks;
+    let c_sel = is_build_mode && build_material == BuildMaterial::Cobblestone;
+    let d_sel = is_build_mode && build_material == BuildMaterial::DirtBlock;
+
+    let p_bg = if p_sel { Some(Color::new(0.32, 0.22, 0.10, 0.95)) } else { None };
+    let p_bor = if p_sel { Some(Color::new(0.95, 0.70, 0.30, 1.0)) } else { None };
+
+    let c_bg = if c_sel { Some(Color::new(0.24, 0.25, 0.32, 0.95)) } else { None };
+    let c_bor = if c_sel { Some(Color::new(0.75, 0.80, 0.95, 1.0)) } else { None };
+
+    let d_bg = if d_sel { Some(Color::new(0.28, 0.20, 0.12, 0.95)) } else { None };
+    let d_bor = if d_sel { Some(Color::new(0.80, 0.60, 0.35, 1.0)) } else { None };
+
+    let p_text = format!("[🧱# Tab:{}]", planks_count);
+    let c_text = format!("[🏰O Ado:{}]", cobble_count);
+    let d_text = format!("[🚜. Tie:{}]", dirt_count);
+
+    if draw_ascii_button_styled(
+        &p_text,
         sb_x + 12.0,
         cy,
         third_w,
@@ -489,11 +623,16 @@ pub fn render_ui(
         my,
         mouse_click,
         font,
+        p_bg,
+        p_bor,
+        if p_sel { Some(Color::new(1.0, 0.90, 0.50, 1.0)) } else { None },
     ) {
+        result.clicked_select_material = Some(BuildMaterial::WoodPlanks);
         result.clicked_build_planks = true;
     }
-    if draw_ascii_button(
-        "[🏰COBBLE (V)]",
+
+    if draw_ascii_button_styled(
+        &c_text,
         sb_x + 18.0 + third_w,
         cy,
         third_w,
@@ -502,14 +641,38 @@ pub fn render_ui(
         my,
         mouse_click,
         font,
+        c_bg,
+        c_bor,
+        if c_sel { Some(Color::new(1.0, 0.90, 0.50, 1.0)) } else { None },
     ) {
+        result.clicked_select_material = Some(BuildMaterial::Cobblestone);
         result.clicked_build_cobble = true;
     }
-    if draw_ascii_button(
-        "[💥HARV/DEM(X)]",
+
+    if draw_ascii_button_styled(
+        &d_text,
         sb_x + 24.0 + third_w * 2.0,
         cy,
         third_w,
+        22.0,
+        mx,
+        my,
+        mouse_click,
+        font,
+        d_bg,
+        d_bor,
+        if d_sel { Some(Color::new(1.0, 0.90, 0.50, 1.0)) } else { None },
+    ) {
+        result.clicked_select_material = Some(BuildMaterial::DirtBlock);
+    }
+    cy += 26.0;
+
+    // Botón directo de Demoler / Romper
+    if draw_ascii_button(
+        "[ 💥 ROMPER / DEMOLER (Clic Der / X) ]",
+        sb_x + 12.0,
+        cy,
+        sidebar_w - 24.0,
         22.0,
         mx,
         my,
@@ -523,7 +686,7 @@ pub fn render_ui(
     // Contextual Drink Water action
     if player.can_drink_water(world) {
         if draw_ascii_button(
-            "[ 💧 DRINK FRESHWATER (Key B) ]",
+            "[ 💧 DRINK FRESHWATER (Key E) ]",
             sb_x + 12.0,
             cy,
             sidebar_w - 24.0,
@@ -688,7 +851,7 @@ pub fn render_ui(
         foot_y,
         screen_w,
         bottom_h,
-        Color::new(0.05, 0.07, 0.10, 0.98),
+        Color::new(0.05, 0.07, 0.10, 1.0),
     );
     draw_line(
         0.0,
@@ -699,7 +862,11 @@ pub fn render_ui(
         Color::new(0.22, 0.30, 0.40, 1.0),
     );
 
-    let help_text = "[L-Click: Move/Harvest] [F: Hunt] [E: Interact/Skin] [C: Planks] [V: Cobble] [X/T: Mine/Chop/Demolish] [R-Click: Build] [I: Inv]";
+    let help_text = if is_build_mode {
+        "[🔨 MODO CONSTRUCCIÓN] [Clic Izq: Colocar bloque] [Clic Der: Romper/Demoler] [R: Cambiar Material] [B: Salir] [I: Inv]"
+    } else {
+        "[B: Modo Construcción] [Clic Izq: Mover/Ruta] [Clic Der: Pan Cámara] [E: Interact/Skin] [F: Cazar] [I: Inv]"
+    };
     draw_text_ex(
         help_text,
         14.0,
@@ -707,7 +874,7 @@ pub fn render_ui(
         TextParams {
             font,
             font_size: 12,
-            color: Color::new(0.65, 0.75, 0.85, 1.0),
+            color: if is_build_mode { Color::new(1.0, 0.85, 0.35, 1.0) } else { Color::new(0.65, 0.75, 0.85, 1.0) },
             ..Default::default()
         },
     );
@@ -779,16 +946,37 @@ fn draw_ascii_button(
     click: bool,
     font: Option<&Font>,
 ) -> bool {
+    draw_ascii_button_styled(text, x, y, w, h, mx, my, click, font, None, None, None)
+}
+
+fn draw_ascii_button_styled(
+    text: &str,
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    mx: f32,
+    my: f32,
+    click: bool,
+    font: Option<&Font>,
+    custom_bg: Option<Color>,
+    custom_border: Option<Color>,
+    custom_text_col: Option<Color>,
+) -> bool {
     let hovered = mx >= x && mx <= (x + w) && my >= y && my <= (y + h);
 
     let bg = if hovered {
         Color::new(0.20, 0.30, 0.42, 1.0)
+    } else if let Some(c) = custom_bg {
+        c
     } else {
         Color::new(0.10, 0.14, 0.20, 1.0)
     };
 
     let border = if hovered {
         Color::new(0.95, 0.85, 0.30, 1.0)
+    } else if let Some(b) = custom_border {
+        b
     } else {
         Color::new(0.25, 0.35, 0.48, 1.0)
     };
@@ -803,6 +991,8 @@ fn draw_ascii_button(
 
     let text_col = if hovered {
         Color::new(1.0, 1.0, 1.0, 1.0)
+    } else if let Some(tc) = custom_text_col {
+        tc
     } else {
         Color::new(0.85, 0.90, 0.95, 1.0)
     };

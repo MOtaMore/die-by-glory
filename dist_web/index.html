@@ -137,7 +137,7 @@
     </div>
 
     <!-- Macroquad WebAssembly Glue and Plugins -->
-    <script src="mq_js_bundle.js?v=2"></script>
+    <script src="mq_js_bundle.js?v=3"></script>
     <script>
         // Custom LocalStorage Persistent Save System for Web (itch.io)
         miniquad_add_plugin({
@@ -188,7 +188,7 @@
             name: "die_by_glory_storage"
         });
 
-        // Canvas focus and key handling to prevent page scrolling in itch.io iframe
+        // Canvas focus, right-click prevention, and key handling to prevent page scrolling in itch.io iframe
         const gameCanvas = document.getElementById("glcanvas");
         const loadingScreen = document.getElementById("loading-screen");
         const statusText = document.getElementById("status-text");
@@ -199,6 +199,28 @@
                 gameCanvas.focus();
             }
         }
+
+        // Prevent right-click context menu (which freezes game loop & leaves button down)
+        window.addEventListener("contextmenu", function(e) {
+            e.preventDefault();
+            return false;
+        }, { passive: false });
+
+        if (gameCanvas) {
+            gameCanvas.addEventListener("contextmenu", function(e) {
+                e.preventDefault();
+                return false;
+            }, { passive: false });
+        }
+
+        // If user tabs away or window loses focus, reset mouse buttons in engine
+        window.addEventListener("blur", function() {
+            if (window.wasm_exports && window.wasm_exports.mouse_up) {
+                window.wasm_exports.mouse_up(0, 0, 0);
+                window.wasm_exports.mouse_up(0, 0, 1);
+                window.wasm_exports.mouse_up(0, 0, 2);
+            }
+        });
 
         window.addEventListener("click", focusCanvas);
         window.addEventListener("keydown", function(e) {

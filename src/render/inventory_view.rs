@@ -95,7 +95,6 @@ pub fn render_inventory_screen(
     let close_btn_x = card_x + card_w - 32.0;
     let close_btn_y = card_y + 5.0;
     if draw_button("[X]", close_btn_x, close_btn_y, 24.0, 22.0, mx, my, mouse_clicked, font, Color::new(0.9, 0.3, 0.3, 1.0))
-        || is_key_pressed(KeyCode::I)
         || is_key_pressed(KeyCode::Escape)
     {
         state.is_open = false;

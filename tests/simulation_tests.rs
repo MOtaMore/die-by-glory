@@ -518,5 +518,53 @@ mod tests {
         let dem_cobble = world.demolish_at(25, 25);
         assert_eq!(dem_cobble, Ok(ItemType::Cobblestone));
     }
+
+    #[test]
+    fn test_build_mode_materials_and_actions() {
+        use die_by_glory::entity::{BuildMaterial, ItemType};
+
+        // 1. Check material progression and cycling
+        let mut mat = BuildMaterial::WoodPlanks;
+        assert_eq!(mat.item_type(), ItemType::WoodPlanks);
+        assert_eq!(mat.glyph(), '#');
+        assert_eq!(mat.name_es(), "Tablas de Madera");
+
+        mat = mat.next();
+        assert_eq!(mat, BuildMaterial::Cobblestone);
+        assert_eq!(mat.item_type(), ItemType::Cobblestone);
+        assert_eq!(mat.glyph(), 'O');
+        assert_eq!(mat.name_es(), "Adoquin");
+
+        mat = mat.next();
+        assert_eq!(mat, BuildMaterial::DirtBlock);
+        assert_eq!(mat.item_type(), ItemType::DirtBlock);
+        assert_eq!(mat.glyph(), '.');
+        assert_eq!(mat.name_es(), "Tierra");
+
+        mat = mat.next();
+        assert_eq!(mat, BuildMaterial::WoodPlanks, "Cycling must wrap back to WoodPlanks");
+
+        // 2. Test world interaction through BuildMaterial items
+        let mut world = World::new(4321, BiomeKind::Meadow);
+        let tx = 30;
+        let ty = 30;
+        let base_z = world.get_surface_z(tx, ty);
+
+        // Place WoodPlanks
+        assert!(world.place_block_at(tx, ty, BuildMaterial::WoodPlanks.item_type()).is_ok());
+        assert_eq!(world.get_tile(tx, ty, base_z).unwrap().kind, TileKind::WoodPlanks);
+
+        // Demolish WoodPlanks
+        let dem = world.demolish_at(tx, ty);
+        assert_eq!(dem, Ok(ItemType::WoodPlanks));
+
+        // Place Cobblestone
+        assert!(world.place_block_at(tx, ty, BuildMaterial::Cobblestone.item_type()).is_ok());
+        assert_eq!(world.get_tile(tx, ty, base_z).unwrap().kind, TileKind::Cobblestone);
+
+        // Demolish Cobblestone
+        let dem_c = world.demolish_at(tx, ty);
+        assert_eq!(dem_c, Ok(ItemType::Cobblestone));
+    }
 }
 

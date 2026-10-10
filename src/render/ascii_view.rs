@@ -20,6 +20,7 @@ impl AsciiRenderer {
         camera: &Camera,
         hover_coord: Option<(i32, i32)>,
         destination_marker: Option<(i32, i32)>,
+        build_mode: Option<(char, Color, bool)>,
     ) {
         let (cw, ch) = camera.effective_cell_size();
         let font_size = (ch * 0.90) as u16;
@@ -53,6 +54,15 @@ impl AsciiRenderer {
         for y in min_y..max_y {
             for x in min_x..max_x {
                 let (sx, sy) = camera.world_to_screen(x as f32, y as f32);
+
+                // Viewport culling estricto: no pintar fuera del área de juego
+                if sx + cw <= camera.viewport_x
+                    || sx >= camera.viewport_x + camera.viewport_w
+                    || sy + ch <= camera.viewport_y
+                    || sy >= camera.viewport_y + camera.viewport_h
+                {
+                    continue;
+                }
 
                 // Comprobar si la casilla en la capa de cámara tiene contenido
                 let tile_at_view = world.get_tile(x, y, view_z);
@@ -133,13 +143,20 @@ impl AsciiRenderer {
         // 3b. RENDERIZADO DE ITEMS EN EL SUELO
         for item in &world.ground_items {
             if item.x >= min_x && item.x < max_x && item.y >= min_y && item.y < max_y {
+                let (isx, isy) = camera.world_to_screen(item.x as f32, item.y as f32);
+                if isx + cw <= camera.viewport_x
+                    || isx >= camera.viewport_x + camera.viewport_w
+                    || isy + ch <= camera.viewport_y
+                    || isy >= camera.viewport_y + camera.viewport_h
+                {
+                    continue;
+                }
+
                 let diff_z = view_z - item.z;
                 if diff_z == 0 {
-                    let (isx, isy) = camera.world_to_screen(item.x as f32, item.y as f32);
                     self.draw_ground_item(item, isx, isy, cw, ch, font_size, 1.0, time);
                 } else if diff_z > 0 && diff_z <= 8 {
                     let alpha = (0.84_f32).powi(diff_z).max(0.20);
-                    let (isx, isy) = camera.world_to_screen(item.x as f32, item.y as f32);
                     self.draw_ground_item(item, isx, isy, cw, ch, font_size, alpha, time);
                 }
             }
@@ -148,13 +165,20 @@ impl AsciiRenderer {
         // 3c. RENDERIZADO DE CRIATURAS
         for creature in &world.creatures {
             if creature.x >= min_x && creature.x < max_x && creature.y >= min_y && creature.y < max_y {
+                let (csx, csy) = camera.world_to_screen(creature.x as f32, creature.y as f32);
+                if csx + cw <= camera.viewport_x
+                    || csx >= camera.viewport_x + camera.viewport_w
+                    || csy + ch <= camera.viewport_y
+                    || csy >= camera.viewport_y + camera.viewport_h
+                {
+                    continue;
+                }
+
                 let diff_z = view_z - creature.z;
                 if diff_z == 0 {
-                    let (csx, csy) = camera.world_to_screen(creature.x as f32, creature.y as f32);
                     self.draw_creature(creature, csx, csy, cw, ch, font_size, 1.0, time);
                 } else if diff_z > 0 && diff_z <= 8 {
                     let alpha = (0.84_f32).powi(diff_z).max(0.20);
-                    let (csx, csy) = camera.world_to_screen(creature.x as f32, creature.y as f32);
                     self.draw_creature(creature, csx, csy, cw, ch, font_size, alpha, time);
                 }
             }
@@ -167,14 +191,54 @@ impl AsciiRenderer {
         if let Some((hx, hy)) = hover_coord {
             if hx >= 0 && hx < MAP_WIDTH as i32 && hy >= 0 && hy < MAP_HEIGHT as i32 {
                 let (hsx, hsy) = camera.world_to_screen(hx as f32, hy as f32);
-                draw_rectangle_lines(
-                    hsx,
-                    hsy,
-                    cw,
-                    ch,
-                    2.0,
-                    Color::new(1.0, 1.0, 1.0, 0.65),
-                );
+                if hsx + cw > camera.viewport_x
+                    && hsx < camera.viewport_x + camera.viewport_w
+                    && hsy + ch > camera.viewport_y
+                    && hsy < camera.viewport_y + camera.viewport_h
+                {
+                    if let Some((glyph, b_color, is_demolish)) = build_mode {
+                        if is_demolish {
+                            // Demolish / Break reticle: bright reddish-orange with crosshair
+                            let pulse = ((time * 6.0).sin().abs() * 0.35) + 0.65;
+                            let line_col = Color::new(1.0, 0.35, 0.15, pulse);
+                            draw_rectangle(hsx, hsy, cw, ch, Color::new(0.9, 0.2, 0.1, 0.22));
+                            draw_rectangle_lines(hsx, hsy, cw, ch, 2.5, line_col);
+                            draw_line(hsx + 2.0, hsy + 2.0, hsx + cw - 2.0, hsy + ch - 2.0, 1.8, line_col);
+                            draw_line(hsx + cw - 2.0, hsy + 2.0, hsx + 2.0, hsy + ch - 2.0, 1.8, line_col);
+                        } else {
+                            // Build Blueprint reticle: vibrant blueprint border + pulsing preview glyph
+                            let pulse = ((time * 5.0).sin().abs() * 0.30) + 0.70;
+                            let border_col = Color::new(1.0, 0.85, 0.20, pulse);
+                            draw_rectangle(hsx, hsy, cw, ch, Color::new(0.95, 0.75, 0.15, 0.20));
+                            draw_rectangle_lines(hsx, hsy, cw, ch, 2.2, border_col);
+
+                            let preview_col = Color::new(b_color.r, b_color.g, b_color.b, pulse);
+                            let glyph_str = glyph.to_string();
+                            let tx = hsx + (cw * 0.5) - (font_size as f32 * 0.25);
+                            let ty = hsy + (ch * 0.5) + (font_size as f32 * 0.35);
+                            draw_text_ex(
+                                &glyph_str,
+                                tx,
+                                ty,
+                                TextParams {
+                                    font: self.font.as_ref(),
+                                    font_size,
+                                    color: preview_col,
+                                    ..Default::default()
+                                },
+                            );
+                        }
+                    } else {
+                        draw_rectangle_lines(
+                            hsx,
+                            hsy,
+                            cw,
+                            ch,
+                            2.0,
+                            Color::new(1.0, 1.0, 1.0, 0.65),
+                        );
+                    }
+                }
             }
         }
     }
@@ -251,6 +315,13 @@ impl AsciiRenderer {
         time: f32,
     ) {
         let (psx, psy) = camera.world_to_screen(player.x as f32, player.y as f32);
+        if psx + cw <= camera.viewport_x
+            || psx >= camera.viewport_x + camera.viewport_w
+            || psy + ch <= camera.viewport_y
+            || psy >= camera.viewport_y + camera.viewport_h
+        {
+            return;
+        }
         let center_x = psx + cw * 0.5;
         let center_y = psy + ch * 0.5;
 

@@ -286,3 +286,78 @@ impl GroundItem {
         }
     }
 }
+
+#[allow(dead_code)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
+pub enum BuildMaterial {
+    WoodPlanks,
+    Cobblestone,
+    DirtBlock,
+}
+
+#[allow(dead_code)]
+impl BuildMaterial {
+    pub fn item_type(&self) -> ItemType {
+        match self {
+            BuildMaterial::WoodPlanks => ItemType::WoodPlanks,
+            BuildMaterial::Cobblestone => ItemType::Cobblestone,
+            BuildMaterial::DirtBlock => ItemType::DirtBlock,
+        }
+    }
+
+    pub fn name(&self) -> &'static str {
+        match self {
+            BuildMaterial::WoodPlanks => "Wood Planks",
+            BuildMaterial::Cobblestone => "Cobblestone",
+            BuildMaterial::DirtBlock => "Dirt Block",
+        }
+    }
+
+    pub fn name_es(&self) -> &'static str {
+        match self {
+            BuildMaterial::WoodPlanks => "Tablas de Madera",
+            BuildMaterial::Cobblestone => "Adoquin",
+            BuildMaterial::DirtBlock => "Tierra",
+        }
+    }
+
+    pub fn glyph(&self) -> char {
+        match self {
+            BuildMaterial::WoodPlanks => '#',
+            BuildMaterial::Cobblestone => 'O',
+            BuildMaterial::DirtBlock => '.',
+        }
+    }
+
+    pub fn color(&self) -> Color {
+        match self {
+            BuildMaterial::WoodPlanks => Color::new(0.85, 0.60, 0.35, 1.0),
+            BuildMaterial::Cobblestone => Color::new(0.70, 0.70, 0.75, 1.0),
+            BuildMaterial::DirtBlock => Color::new(0.60, 0.45, 0.28, 1.0),
+        }
+    }
+
+    pub fn next(&self) -> Self {
+        match self {
+            BuildMaterial::WoodPlanks => BuildMaterial::Cobblestone,
+            BuildMaterial::Cobblestone => BuildMaterial::DirtBlock,
+            BuildMaterial::DirtBlock => BuildMaterial::WoodPlanks,
+        }
+    }
+
+    pub fn from_index(idx: usize) -> Self {
+        match idx % 3 {
+            0 => BuildMaterial::WoodPlanks,
+            1 => BuildMaterial::Cobblestone,
+            _ => BuildMaterial::DirtBlock,
+        }
+    }
+
+    pub fn to_index(&self) -> usize {
+        match self {
+            BuildMaterial::WoodPlanks => 0,
+            BuildMaterial::Cobblestone => 1,
+            BuildMaterial::DirtBlock => 2,
+        }
+    }
+}

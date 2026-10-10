@@ -156,6 +156,26 @@ impl Overworld {
         }
     }
 
+    pub fn station_has_adjacent_land(&self, sx: usize, sy: usize) -> bool {
+        for dy in -1..=1 {
+            for dx in -1..=1 {
+                if dx == 0 && dy == 0 {
+                    continue;
+                }
+                let nx = sx as i32 + dx;
+                let ny = sy as i32 + dy;
+                if nx >= 0 && nx < OW_WIDTH as i32 && ny >= 0 && ny < OW_HEIGHT as i32 {
+                    if let Some(tile) = self.get_tile(nx as usize, ny as usize) {
+                        if tile.is_land {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+        false
+    }
+
     pub fn can_embark_at(&self, target_x: usize, target_y: usize, is_fast_travel: bool) -> (bool, &'static str) {
         let is_land = self.get_tile(target_x, target_y).map(|t| t.is_land).unwrap_or(false);
         if !is_land {
@@ -173,10 +193,19 @@ impl Overworld {
                 }
 
                 if self.is_adjacent_to_current_station(target_x, target_y) {
-                    (true, "Adjacent region: valid travel step.")
-                } else {
-                    (false, "Too far: you can only travel to adjacent neighboring regions!")
+                    return (true, "Adjacent region: valid travel step.");
                 }
+
+                if self.visited_stations.contains(&(target_x, target_y)) {
+                    return (true, "Known station: travel to visited camp.");
+                }
+
+                // Si la estación actual es una isla aislada sin tierra vecina, permitir viaje marítimo al continente
+                if !self.station_has_adjacent_land(sx, sy) {
+                    return (true, "Coastal expedition: sea voyage from isolated island to mainland.");
+                }
+
+                (false, "Too far: you can only travel to adjacent regions or visited camps!")
             }
             None => (true, "Valid embark site."),
         }

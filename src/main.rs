@@ -6,7 +6,7 @@ mod save;
 mod world;
 
 use camera::Camera;
-use entity::{CreatureType, ItemType, Player, PlayerEvent, Radar};
+use entity::{BuildMaterial, CreatureType, ItemType, Player, PlayerEvent, Radar};
 use pathfinding::find_path;
 use render::{
     render_inventory_screen, render_main_menu, render_overworld_screen, render_radar_hud,
@@ -25,7 +25,7 @@ fn window_conf() -> Conf {
         window_title: "Die by Glory - ASCII Survival (Rust)".to_string(),
         window_width: 1280,
         window_height: 768,
-        high_dpi: true,
+        high_dpi: false,
         window_resizable: true,
         ..Default::default()
     }
@@ -49,20 +49,29 @@ enum AppState {
         inventory_ui: InventoryUiState,
         destination_marker: Option<(i32, i32)>,
         last_drag_pos: Option<(f32, f32)>,
+        is_build_mode: bool,
+        build_material: BuildMaterial,
     },
 }
 
 fn load_game_state(save: SaveGame) -> AppState {
     let mut ow = Overworld::new(save.overworld_seed);
-    ow.cursor_x = save.ow_current_x;
-    ow.cursor_y = save.ow_current_y;
-    ow.set_station(save.ow_current_x, save.ow_current_y);
+    let safe_ow_x = save.ow_current_x.min(OW_WIDTH - 1);
+    let safe_ow_y = save.ow_current_y.min(OW_HEIGHT - 1);
+    ow.cursor_x = safe_ow_x;
+    ow.cursor_y = safe_ow_y;
+    ow.set_station(safe_ow_x, safe_ow_y);
     ow.visited_stations = save.discovered_regions.clone();
 
     let mut world = World::new(save.overworld_seed, save.current_biome);
     world.time_of_day = save.time_of_day;
 
-    let mut player = Player::new((save.player_x, save.player_y, save.player_z));
+    // Asegurar que el jugador reanude dentro del área jugable, lejos de los bordes que activan el Fast Travel
+    let px = save.player_x.clamp(3, MAP_WIDTH as i32 - 4);
+    let py = save.player_y.clamp(3, MAP_HEIGHT as i32 - 4);
+    let pz = world.get_surface_z(px, py);
+
+    let mut player = Player::new((px, py, pz));
     player.health = save.health;
     player.hunger = save.hunger;
     player.thirst = save.thirst;
@@ -88,6 +97,189 @@ fn load_game_state(save: SaveGame) -> AppState {
         inventory_ui: InventoryUiState::new(),
         destination_marker: None,
         last_drag_pos: None,
+        is_build_mode: false,
+        build_material: BuildMaterial::WoodPlanks,
+    }
+}
+
+fn handle_place_block(
+    world: &mut World,
+    player: &mut Player,
+    ui_state: &mut UiState,
+    material: BuildMaterial,
+    tx: i32,
+    ty: i32,
+    destination_marker: &mut Option<(i32, i32)>,
+) {
+    let item = material.item_type();
+    if player.inventory.count_item(item) > 0 {
+        let dist = ((player.x - tx).pow(2) as f32 + (player.y - ty).pow(2) as f32).sqrt();
+        if dist <= 3.5 {
+            match world.place_block_at(tx, ty, item) {
+                Ok(_) => {
+                    player.inventory.remove_item(item, 1);
+                    player.energy = (player.energy - 2.5).max(0.0);
+                    let left = player.inventory.count_item(item);
+                    ui_state.add_log(format!(
+                        "🔨 Colocado {} en ({}, {})! (Restantes en mochila: {})",
+                        material.name_es(),
+                        tx,
+                        ty,
+                        left
+                    ));
+                }
+                Err(e) => {
+                    ui_state.add_log(format!("No se puede construir aquí: {}", e));
+                }
+            }
+        } else if let Some(path) = find_path(world, (player.x, player.y), (tx, ty)) {
+            *destination_marker = Some((tx, ty));
+            player.set_path(path);
+            ui_state.add_log(format!(
+                "Moviéndose hacia ({}, {}) para colocar {}...",
+                tx,
+                ty,
+                material.name_es()
+            ));
+        } else {
+            ui_state.add_log(format!("Destino ({}, {}) fuera de alcance o bloqueado.", tx, ty));
+        }
+    } else {
+        ui_state.add_log(format!(
+            "⚠️ ¡No tienes {} en la mochila! Craftea más [I] o reúne materiales.",
+            material.name_es()
+        ));
+    }
+}
+
+fn handle_harvest_demolish(
+    world: &mut World,
+    player: &mut Player,
+    ui_state: &mut UiState,
+    tx: i32,
+    ty: i32,
+    destination_marker: &mut Option<(i32, i32)>,
+) {
+    let dist = ((player.x - tx).pow(2) as f32 + (player.y - ty).pow(2) as f32).sqrt();
+    if dist <= 3.5 {
+        let tz = world.get_surface_z(tx, ty);
+        let t_kind = world.get_tile(tx, ty, tz).map(|t| t.kind).unwrap_or(TileKind::Air);
+
+        match t_kind {
+            TileKind::TreeTrunk | TileKind::PalmTree => {
+                if player.has_hatchet() {
+                    match world.chop_tree_at(tx, ty) {
+                        Ok((logs, sticks)) => {
+                            let rem_l = player.inventory.add_item(ItemType::WoodLog, logs);
+                            let rem_s = player.inventory.add_item(ItemType::Stick, sticks);
+                            if rem_l > 0 {
+                                world.spawn_ground_item(ItemType::WoodLog, rem_l, tx, ty, tz);
+                            }
+                            if rem_s > 0 {
+                                world.spawn_ground_item(ItemType::Stick, rem_s, tx, ty, tz);
+                            }
+                            player.energy = (player.energy - 6.0).max(0.0);
+                            ui_state.add_log(format!(
+                                "🪓 Árbol talado! Cosechados {}x Troncos y {}x Palos.",
+                                logs, sticks
+                            ));
+                        }
+                        Err(e) => ui_state.add_log(e.to_string()),
+                    }
+                } else {
+                    ui_state.add_log("⚠️ ¡Necesitas un Hacha de Piedra para talar árboles! Craftea una en el inventario [I].".to_string());
+                }
+            }
+            TileKind::MountainRock
+            | TileKind::MountainPeak
+            | TileKind::Stone
+            | TileKind::Granite
+            | TileKind::IronOre
+            | TileKind::CoalOre => {
+                if player.has_pickaxe() {
+                    match world.pickaxe_rock_at(tx, ty) {
+                        Ok((item, count)) => {
+                            let rem = player.inventory.add_item(item, count);
+                            if rem > 0 {
+                                world.spawn_ground_item(item, rem, tx, ty, tz);
+                            }
+                            player.energy = (player.energy - 7.0).max(0.0);
+                            ui_state.add_log(format!(
+                                "⛏️ Piedra picada con Pico de Piedra! Cosechados {}x {}.",
+                                count,
+                                item.name()
+                            ));
+                        }
+                        Err(e) => ui_state.add_log(e.to_string()),
+                    }
+                } else {
+                    ui_state.add_log("⚠️ ¡Necesitas un Pico de Piedra para picar roca! Craftea uno en el inventario [I].".to_string());
+                }
+            }
+            TileKind::Grass
+            | TileKind::TallGrass
+            | TileKind::Wildflower
+            | TileKind::Soil
+            | TileKind::Subsoil
+            | TileKind::Sand
+            | TileKind::DesertSand
+            | TileKind::DesertDune
+            | TileKind::BeachSand => {
+                if player.has_shovel() {
+                    match world.shovel_dirt_at(tx, ty) {
+                        Ok(item) => {
+                            let rem = player.inventory.add_item(item, 1);
+                            if rem > 0 {
+                                world.spawn_ground_item(item, rem, tx, ty, tz);
+                            }
+                            player.energy = (player.energy - 4.5).max(0.0);
+                            ui_state.add_log("🚜 Tierra excavada con Pala de Piedra! Cosechado 1x Bloque de Tierra (Elevación reducida).".to_string());
+                        }
+                        Err(e) => ui_state.add_log(e.to_string()),
+                    }
+                } else {
+                    ui_state.add_log("⚠️ ¡Necesitas una Pala de Piedra para cavar tierra! Craftea una en el inventario [I].".to_string());
+                }
+            }
+            TileKind::WoodPlanks => {
+                match world.demolish_at(tx, ty) {
+                    Ok(item) => {
+                        let rem = player.inventory.add_item(item, 1);
+                        if rem > 0 {
+                            world.spawn_ground_item(item, rem, tx, ty, tz);
+                        }
+                        player.energy = (player.energy - 3.0).max(0.0);
+                        ui_state.add_log("💥 ¡Tablas de Madera demolidas! Recuperado 1x Tablas de Madera en mochila.".to_string());
+                    }
+                    Err(e) => ui_state.add_log(e.to_string()),
+                }
+            }
+            TileKind::Cobblestone => {
+                match world.demolish_at(tx, ty) {
+                    Ok(item) => {
+                        let rem = player.inventory.add_item(item, 1);
+                        if rem > 0 {
+                            world.spawn_ground_item(item, rem, tx, ty, tz);
+                        }
+                        player.energy = (player.energy - 4.0).max(0.0);
+                        ui_state.add_log("💥 ¡Bloque de Adoquín demolido! Recuperado 1x Adoquín en mochila.".to_string());
+                    }
+                    Err(e) => ui_state.add_log(e.to_string()),
+                }
+            }
+            _ => {
+                ui_state.add_log("El objetivo no se puede cosechar ni demoler.".to_string());
+            }
+        }
+    } else if let Some(path) = find_path(world, (player.x, player.y), (tx, ty)) {
+        *destination_marker = Some((tx, ty));
+        player.set_path(path);
+        ui_state.add_log(format!(
+            "Moviéndose hacia ({}, {}) para cosechar/demoler...",
+            tx, ty
+        ));
+    } else {
+        ui_state.add_log(format!("Destino ({}, {}) fuera de alcance o bloqueado.", tx, ty));
     }
 }
 
@@ -153,6 +345,14 @@ async fn main() {
                     }
                 }
 
+                if res.exit_to_main_menu_force {
+                    app_state = AppState::MainMenu {
+                        menu_state: MenuState::new(),
+                    };
+                    next_frame().await;
+                    continue;
+                }
+
                 // Cargar partida guardada desde disco
                 if res.load_saved_game {
                     if let Some(save) = SaveGame::load() {
@@ -215,6 +415,8 @@ async fn main() {
                         inventory_ui: InventoryUiState::new(),
                         destination_marker: None,
                         last_drag_pos: None,
+                        is_build_mode: false,
+                        build_material: BuildMaterial::WoodPlanks,
                     };
                 }
             }
@@ -229,6 +431,8 @@ async fn main() {
                 inventory_ui,
                 destination_marker,
                 last_drag_pos,
+                is_build_mode,
+                build_material,
             } => {
                 camera.update_viewport(screen_width(), screen_height(), 330.0, 38.0, 28.0);
                 world.update_time(dt);
@@ -287,6 +491,46 @@ async fn main() {
                     None
                 };
 
+                let hover_coord = if is_hover_in_bounds && camera.is_point_in_viewport(mx, my) {
+                    Some((hover_gx, hover_gy))
+                } else {
+                    None
+                };
+
+                let build_reticle = if *is_build_mode {
+                    let is_demolish = if let Some((hx, hy)) = hover_coord {
+                        let hz = world.get_surface_z(hx, hy);
+                        let t_kind = world.get_tile(hx, hy, hz).map(|t| t.kind).unwrap_or(TileKind::Air);
+                        t_kind == TileKind::TreeTrunk
+                            || t_kind == TileKind::PalmTree
+                            || t_kind == TileKind::Stone
+                            || t_kind == TileKind::MountainRock
+                            || t_kind == TileKind::MountainPeak
+                            || t_kind == TileKind::Granite
+                            || t_kind == TileKind::WoodPlanks
+                            || t_kind == TileKind::Cobblestone
+                            || t_kind == TileKind::Soil
+                            || t_kind == TileKind::Grass
+                            || t_kind == TileKind::Sand
+                    } else {
+                        false
+                    };
+                    Some((build_material.glyph(), build_material.color(), is_demolish))
+                } else {
+                    None
+                };
+
+                // 1. RENDERIZADO DEL MUNDO (Capa 0: dibujado primero dentro del viewport)
+                renderer.render(
+                    world,
+                    player,
+                    camera,
+                    hover_coord,
+                    *destination_marker,
+                    build_reticle,
+                );
+
+                // 2. RENDERIZADO DE LA INTERFAZ PRINCIPAL (Capa 1: dibujado ENCIMA del mundo)
                 let ui_res = render_ui(
                     world,
                     player,
@@ -294,6 +538,8 @@ async fn main() {
                     hover_tile_info.as_ref().map(|(gx, gy, gz, t)| (*gx, *gy, *gz, t)),
                     ui_state,
                     font.as_ref(),
+                    *is_build_mode,
+                    *build_material,
                 );
 
                 // ==============================================================
@@ -341,16 +587,69 @@ async fn main() {
                 let at_east_edge = player.x >= (MAP_WIDTH as i32 - 1);
                 let at_north_edge = player.y <= 0;
                 let at_south_edge = player.y >= (MAP_HEIGHT as i32 - 1);
+                let is_at_edge = at_west_edge || at_east_edge || at_north_edge || at_south_edge;
+                let trigger_manual = ui_res.clicked_fast_travel || is_key_pressed(KeyCode::M);
 
-                let trigger_fast_travel = at_west_edge
-                    || at_east_edge
-                    || at_north_edge
-                    || at_south_edge
-                    || ui_res.clicked_fast_travel
-                    || is_key_pressed(KeyCode::M);
+                if is_at_edge {
+                    // Determinar qué región continental vecina corresponde a esta dirección
+                    let (target_ow_x, target_ow_y) = if at_west_edge {
+                        (overworld.cursor_x.saturating_sub(1), overworld.cursor_y)
+                    } else if at_east_edge {
+                        ((overworld.cursor_x + 1).min(OW_WIDTH - 1), overworld.cursor_y)
+                    } else if at_north_edge {
+                        (overworld.cursor_x, overworld.cursor_y.saturating_sub(1))
+                    } else {
+                        (overworld.cursor_x, (overworld.cursor_y + 1).min(OW_HEIGHT - 1))
+                    };
 
-                if trigger_fast_travel {
-                    // Guardar progreso antes de viajar
+                    let target_is_land = overworld
+                        .get_tile(target_ow_x, target_ow_y)
+                        .map(|t| t.is_land)
+                        .unwrap_or(false);
+
+                    if !target_is_land || (target_ow_x == overworld.cursor_x && target_ow_y == overworld.cursor_y) {
+                        // El borde da al océano o al límite del mapa continental: no salir del mapa
+                        player.cancel_movement();
+                        *destination_marker = None;
+                        player.x = player.x.clamp(2, MAP_WIDTH as i32 - 3);
+                        player.y = player.y.clamp(2, MAP_HEIGHT as i32 - 3);
+                        ui_state.add_log("🌊 Vast ocean waters stretch ahead. Cannot travel into deep sea on foot.".to_string());
+                    } else {
+                        // Hay tierra continental adyacente: abrir Fast Travel hacia esa región
+                        player.cancel_movement();
+                        *destination_marker = None;
+                        player.x = player.x.clamp(2, MAP_WIDTH as i32 - 3);
+                        player.y = player.y.clamp(2, MAP_HEIGHT as i32 - 3);
+
+                        // Guardar progreso con posición segura adentro del mapa
+                        let save = SaveGame::create_from_state(
+                            world,
+                            player,
+                            overworld.seed,
+                            overworld.cursor_x,
+                            overworld.cursor_y,
+                            overworld.visited_stations.clone(),
+                        );
+                        let _ = save.save();
+
+                        overworld.cursor_x = target_ow_x;
+                        overworld.cursor_y = target_ow_y;
+
+                        let ow_clone = overworld.clone();
+                        app_state = AppState::WorldSelect {
+                            overworld: ow_clone,
+                            is_fast_travel: true,
+                        };
+                        next_frame().await;
+                        continue;
+                    }
+                } else if trigger_manual {
+                    // Activación manual desde tecla M o botón de Fast Travel
+                    player.cancel_movement();
+                    *destination_marker = None;
+                    player.x = player.x.clamp(2, MAP_WIDTH as i32 - 3);
+                    player.y = player.y.clamp(2, MAP_HEIGHT as i32 - 3);
+
                     let save = SaveGame::create_from_state(
                         world,
                         player,
@@ -361,20 +660,13 @@ async fn main() {
                     );
                     let _ = save.save();
 
-                    // Mover el cursor del overworld hacia la dirección de salida
-                    if at_west_edge {
-                        overworld.cursor_x = overworld.cursor_x.saturating_sub(1);
-                    } else if at_east_edge {
-                        overworld.cursor_x = (overworld.cursor_x + 1).min(OW_WIDTH - 1);
-                    } else if at_north_edge {
-                        overworld.cursor_y = overworld.cursor_y.saturating_sub(1);
-                    } else if at_south_edge {
-                        overworld.cursor_y = (overworld.cursor_y + 1).min(OW_HEIGHT - 1);
+                    // Poner el cursor sobre la estación actual para que can_embark sea válido
+                    if let Some((sx, sy)) = overworld.current_station {
+                        overworld.cursor_x = sx;
+                        overworld.cursor_y = sy;
                     }
-                    overworld.ensure_valid_cursor();
 
                     let ow_clone = overworld.clone();
-
                     app_state = AppState::WorldSelect {
                         overworld: ow_clone,
                         is_fast_travel: true,
@@ -546,36 +838,58 @@ async fn main() {
                 }
 
                 // -------------------------------------------------------------
+                // MODO CONSTRUCCIÓN: ACTIVAR / DESACTIVAR [Tecla B / Botón UI]
+                // -------------------------------------------------------------
+                if (is_key_pressed(KeyCode::B) || ui_res.clicked_toggle_build_mode) && !inventory_ui.is_open {
+                    *is_build_mode = !*is_build_mode;
+                    if *is_build_mode {
+                        let cnt = player.inventory.count_item(build_material.item_type());
+                        ui_state.add_log(format!(
+                            "🔨 [MODO CONSTRUCCIÓN: ACTIVADO] Clic Izq: Poner {} [{}] (x{}) | Clic Der: Romper | R: Cambiar | B: Salir",
+                            build_material.name_es(),
+                            build_material.glyph(),
+                            cnt
+                        ));
+                    } else {
+                        ui_state.add_log("🛡️ Modo Construcción desactivado. Navegación normal activa.".to_string());
+                    }
+                }
+
+                // Ciclar material de construcción [Tecla R]
+                if is_key_pressed(KeyCode::R) && !inventory_ui.is_open {
+                    *build_material = build_material.next();
+                    let cnt = player.inventory.count_item(build_material.item_type());
+                    ui_state.add_log(format!(
+                        "🧱 Material activo: {} [{}] (x{} en mochila)",
+                        build_material.name_es(),
+                        build_material.glyph(),
+                        cnt
+                    ));
+                }
+
+                // Selección de material desde la barra lateral
+                if let Some(mat) = ui_res.clicked_select_material {
+                    *build_material = mat;
+                    *is_build_mode = true;
+                    let cnt = player.inventory.count_item(mat.item_type());
+                    ui_state.add_log(format!(
+                        "🧱 Material seleccionado: {} [{}] (x{} en mochila). Modo Construcción ACTIVO.",
+                        mat.name_es(),
+                        mat.glyph(),
+                        cnt
+                    ));
+                }
+
+                // -------------------------------------------------------------
                 // CONSTRUCCIÓN: COLOCAR TABLAS DE MADERA [C / Botón PLANK]
                 // -------------------------------------------------------------
                 if (is_key_pressed(KeyCode::C) || ui_res.clicked_build_planks) && !inventory_ui.is_open {
+                    *build_material = BuildMaterial::WoodPlanks;
+                    *is_build_mode = true;
                     if is_hover_in_bounds {
-                        let dist = ((player.x - hover_gx).pow(2) as f32 + (player.y - hover_gy).pow(2) as f32).sqrt();
-                        if player.inventory.count_item(ItemType::WoodPlanks) > 0 {
-                            if dist <= 3.5 {
-                                match world.place_block_at(hover_gx, hover_gy, ItemType::WoodPlanks) {
-                                    Ok(_) => {
-                                        player.inventory.remove_item(ItemType::WoodPlanks, 1);
-                                        player.energy = (player.energy - 2.5).max(0.0);
-                                        let left = player.inventory.count_item(ItemType::WoodPlanks);
-                                        ui_state.add_log(format!("🔨 Built Wood Planks at ({}, {})! (Planks left: {})", hover_gx, hover_gy, left));
-                                    }
-                                    Err(e) => {
-                                        ui_state.add_log(format!("Cannot build here: {}", e));
-                                    }
-                                }
-                            } else if let Some(path) = find_path(world, (player.x, player.y), (hover_gx, hover_gy)) {
-                                *destination_marker = Some((hover_gx, hover_gy));
-                                player.set_path(path);
-                                ui_state.add_log(format!("Moving closer to ({}, {}) to place planks...", hover_gx, hover_gy));
-                            } else {
-                                ui_state.add_log(format!("Target ({}, {}) is too far or blocked.", hover_gx, hover_gy));
-                            }
-                        } else {
-                            ui_state.add_log("No Wood Planks in backpack! Chop trees with a Hatchet and craft planks [I].".to_string());
-                        }
+                        handle_place_block(world, player, ui_state, BuildMaterial::WoodPlanks, hover_gx, hover_gy, destination_marker);
                     } else {
-                        ui_state.add_log("Hover mouse over a map cell to place Wood Planks.".to_string());
+                        ui_state.add_log("Modo Construcción (Tablas de Madera) activo. Haz clic sobre una casilla para construir.".to_string());
                     }
                 }
 
@@ -583,33 +897,12 @@ async fn main() {
                 // CONSTRUCCIÓN: COLOCAR ADOQUÍN / COBBLESTONE [V / Botón COBBLE]
                 // -------------------------------------------------------------
                 if (is_key_pressed(KeyCode::V) || ui_res.clicked_build_cobble) && !inventory_ui.is_open {
+                    *build_material = BuildMaterial::Cobblestone;
+                    *is_build_mode = true;
                     if is_hover_in_bounds {
-                        let dist = ((player.x - hover_gx).pow(2) as f32 + (player.y - hover_gy).pow(2) as f32).sqrt();
-                        if player.inventory.count_item(ItemType::Cobblestone) > 0 {
-                            if dist <= 3.5 {
-                                match world.place_block_at(hover_gx, hover_gy, ItemType::Cobblestone) {
-                                    Ok(_) => {
-                                        player.inventory.remove_item(ItemType::Cobblestone, 1);
-                                        player.energy = (player.energy - 3.0).max(0.0);
-                                        let left = player.inventory.count_item(ItemType::Cobblestone);
-                                        ui_state.add_log(format!("🔨 Built Cobblestone at ({}, {})! (Cobblestone left: {})", hover_gx, hover_gy, left));
-                                    }
-                                    Err(e) => {
-                                        ui_state.add_log(format!("Cannot build here: {}", e));
-                                    }
-                                }
-                            } else if let Some(path) = find_path(world, (player.x, player.y), (hover_gx, hover_gy)) {
-                                *destination_marker = Some((hover_gx, hover_gy));
-                                player.set_path(path);
-                                ui_state.add_log(format!("Moving closer to ({}, {}) to place cobblestone...", hover_gx, hover_gy));
-                            } else {
-                                ui_state.add_log(format!("Target ({}, {}) is too far or blocked.", hover_gx, hover_gy));
-                            }
-                        } else {
-                            ui_state.add_log("No Cobblestone blocks in backpack! Mine rocks with a Pickaxe or craft cobblestone [I].".to_string());
-                        }
+                        handle_place_block(world, player, ui_state, BuildMaterial::Cobblestone, hover_gx, hover_gy, destination_marker);
                     } else {
-                        ui_state.add_log("Hover mouse over a map cell to place Cobblestone.".to_string());
+                        ui_state.add_log("Modo Construcción (Adoquín) activo. Haz clic sobre una casilla para construir.".to_string());
                     }
                 }
 
@@ -646,102 +939,9 @@ async fn main() {
                     };
 
                     if let Some((tx, ty)) = target_opt {
-                        let dist = ((player.x - tx).pow(2) as f32 + (player.y - ty).pow(2) as f32).sqrt();
-                        if dist <= 3.5 {
-                            let tz = world.get_surface_z(tx, ty);
-                            let t_kind = world.get_tile(tx, ty, tz).map(|t| t.kind).unwrap_or(TileKind::Air);
-
-                            match t_kind {
-                                TileKind::TreeTrunk | TileKind::PalmTree => {
-                                    if player.has_hatchet() {
-                                        match world.chop_tree_at(tx, ty) {
-                                            Ok((logs, sticks)) => {
-                                                let rem_l = player.inventory.add_item(ItemType::WoodLog, logs);
-                                                let rem_s = player.inventory.add_item(ItemType::Stick, sticks);
-                                                if rem_l > 0 { world.spawn_ground_item(ItemType::WoodLog, rem_l, tx, ty, tz); }
-                                                if rem_s > 0 { world.spawn_ground_item(ItemType::Stick, rem_s, tx, ty, tz); }
-                                                player.energy = (player.energy - 6.0).max(0.0);
-                                                ui_state.add_log(format!("🪓 Chopped tree! Harvested {}x Wood Logs and {}x Sticks.", logs, sticks));
-                                            }
-                                            Err(e) => ui_state.add_log(e.to_string()),
-                                        }
-                                    } else {
-                                        ui_state.add_log("⚠️ Need a Stone Hatchet to chop trees! Craft one [I] with Sticks, Stone and Cord.".to_string());
-                                    }
-                                }
-                                TileKind::MountainRock | TileKind::MountainPeak | TileKind::Stone | TileKind::Granite | TileKind::IronOre | TileKind::CoalOre => {
-                                    if player.has_pickaxe() {
-                                        match world.pickaxe_rock_at(tx, ty) {
-                                            Ok((item, count)) => {
-                                                let rem = player.inventory.add_item(item, count);
-                                                if rem > 0 { world.spawn_ground_item(item, rem, tx, ty, tz); }
-                                                player.energy = (player.energy - 7.0).max(0.0);
-                                                ui_state.add_log(format!("⛏️ Mined stone with Stone Pickaxe! Harvested {}x {}.", count, item.name()));
-                                            }
-                                            Err(e) => ui_state.add_log(e.to_string()),
-                                        }
-                                    } else {
-                                        ui_state.add_log("⚠️ Need a Stone Pickaxe to mine rock! Craft one [I] with Sticks, Stone and Cord.".to_string());
-                                    }
-                                }
-                                TileKind::Grass
-                                | TileKind::TallGrass
-                                | TileKind::Wildflower
-                                | TileKind::Soil
-                                | TileKind::Subsoil
-                                | TileKind::Sand
-                                | TileKind::DesertSand
-                                | TileKind::DesertDune
-                                | TileKind::BeachSand => {
-                                    if player.has_shovel() {
-                                        match world.shovel_dirt_at(tx, ty) {
-                                            Ok(item) => {
-                                                let rem = player.inventory.add_item(item, 1);
-                                                if rem > 0 { world.spawn_ground_item(item, rem, tx, ty, tz); }
-                                                player.energy = (player.energy - 4.5).max(0.0);
-                                                ui_state.add_log("🚜 Shoveled earth with Stone Shovel! Excavated 1x Dirt Block (Elevation lowered).".to_string());
-                                            }
-                                            Err(e) => ui_state.add_log(e.to_string()),
-                                        }
-                                    } else {
-                                        ui_state.add_log("⚠️ Need a Stone Shovel to dig earth! Craft one [I] with Sticks, Stone and Cord.".to_string());
-                                    }
-                                }
-                                TileKind::WoodPlanks => {
-                                    match world.demolish_at(tx, ty) {
-                                        Ok(item) => {
-                                            let rem = player.inventory.add_item(item, 1);
-                                            if rem > 0 { world.spawn_ground_item(item, rem, tx, ty, tz); }
-                                            player.energy = (player.energy - 3.0).max(0.0);
-                                            ui_state.add_log("💥 Demolished Wood Planks! Recovered 1x Wood Planks.".to_string());
-                                        }
-                                        Err(e) => ui_state.add_log(e.to_string()),
-                                    }
-                                }
-                                TileKind::Cobblestone => {
-                                    match world.demolish_at(tx, ty) {
-                                        Ok(item) => {
-                                            let rem = player.inventory.add_item(item, 1);
-                                            if rem > 0 { world.spawn_ground_item(item, rem, tx, ty, tz); }
-                                            player.energy = (player.energy - 4.0).max(0.0);
-                                            ui_state.add_log("💥 Demolished Cobblestone block! Recovered 1x Cobblestone.".to_string());
-                                        }
-                                        Err(e) => ui_state.add_log(e.to_string()),
-                                    }
-                                }
-                                _ => {
-                                    ui_state.add_log("Target cannot be harvested or demolished.".to_string());
-                                }
-                            }
-                        } else if let Some(path) = find_path(world, (player.x, player.y), (tx, ty)) {
-                            *destination_marker = Some((tx, ty));
-                            player.set_path(path);
-                            ui_state.add_log(format!("Moving closer to ({}, {}) to harvest/demolish...", tx, ty));
-                        } else {
-                            ui_state.add_log(format!("Target ({}, {}) is too far or blocked.", tx, ty));
-                        }
+                        handle_harvest_demolish(world, player, ui_state, tx, ty, destination_marker);
                     } else {
-                        ui_state.add_log("Hover mouse over a tree, rock, ground, or block to harvest/demolish [X/T].".to_string());
+                        ui_state.add_log("Pasa el cursor sobre un árbol, roca o bloque para cosechar/demoler [X/T].".to_string());
                     }
                 }
 
@@ -788,14 +988,6 @@ async fn main() {
                     }
                 }
 
-                if is_key_pressed(KeyCode::B) {
-                    if player.drink_water(world) {
-                        ui_state.add_log("Drank cool freshwater via [B] key.".to_string());
-                    } else {
-                        ui_state.add_log("No water within reach to drink.".to_string());
-                    }
-                }
-
                 if is_key_pressed(KeyCode::Equal) || is_key_pressed(KeyCode::KpAdd) {
                     camera.zoom_by(1.15);
                 }
@@ -837,10 +1029,17 @@ async fn main() {
                     *last_drag_pos = None;
                 }
 
+                let is_mouse_over_radar = {
+                    let in_badge = mx >= 12.0 && mx <= 272.0 && my >= 44.0 && my <= 70.0;
+                    let in_dossier = radar.is_list_visible && mx >= 12.0 && mx <= 342.0 && my >= 76.0 && my <= (76.0 + 490.0);
+                    in_badge || in_dossier
+                };
+
                 // Clic derecho (pulsación corta): Colocar Bloque (Planks / Cobblestone / Dirt)
                 if is_mouse_button_released(MouseButton::Right)
                     && !ui_res.is_mouse_over_ui
                     && !inventory_ui.is_open
+                    && !is_mouse_over_radar
                     && camera.is_point_in_viewport(mx, my)
                 {
                     let was_drag = if let Some((sx, sy)) = right_click_start_pos {
@@ -851,54 +1050,60 @@ async fn main() {
                     right_click_start_pos = None;
 
                     if !was_drag && is_hover_in_bounds {
-                        let placeable_item = if let Some(item) = player.inventory.equipment.off_hand.filter(|i| i.placeable_tile().is_some()) {
-                            Some(item)
-                        } else if let Some(item) = player.inventory.equipment.main_hand.filter(|i| i.placeable_tile().is_some()) {
-                            Some(item)
-                        } else if player.inventory.count_item(ItemType::WoodPlanks) > 0 {
-                            Some(ItemType::WoodPlanks)
-                        } else if player.inventory.count_item(ItemType::Cobblestone) > 0 {
-                            Some(ItemType::Cobblestone)
-                        } else if player.inventory.count_item(ItemType::DirtBlock) > 0 {
-                            Some(ItemType::DirtBlock)
+                        if *is_build_mode {
+                            handle_harvest_demolish(world, player, ui_state, hover_gx, hover_gy, destination_marker);
                         } else {
-                            None
-                        };
+                            let placeable_item = if let Some(item) = player.inventory.equipment.off_hand.filter(|i| i.placeable_tile().is_some()) {
+                                Some(item)
+                            } else if let Some(item) = player.inventory.equipment.main_hand.filter(|i| i.placeable_tile().is_some()) {
+                                Some(item)
+                            } else if player.inventory.count_item(ItemType::WoodPlanks) > 0 {
+                                Some(ItemType::WoodPlanks)
+                            } else if player.inventory.count_item(ItemType::Cobblestone) > 0 {
+                                Some(ItemType::Cobblestone)
+                            } else if player.inventory.count_item(ItemType::DirtBlock) > 0 {
+                                Some(ItemType::DirtBlock)
+                            } else {
+                                None
+                            };
 
-                        if let Some(item) = placeable_item {
-                            let dist = ((player.x - hover_gx).pow(2) as f32 + (player.y - hover_gy).pow(2) as f32).sqrt();
-                            if dist <= 3.5 {
-                                match world.place_block_at(hover_gx, hover_gy, item) {
-                                    Ok(_) => {
-                                        player.inventory.remove_item(item, 1);
-                                        player.energy = (player.energy - 3.0).max(0.0);
-                                        let rem = player.inventory.count_item(item);
-                                        ui_state.add_log(format!("🔨 Placed {} at ({}, {})! (Remaining: {})", item.name(), hover_gx, hover_gy, rem));
+                            if let Some(item) = placeable_item {
+                                let dist = ((player.x - hover_gx).pow(2) as f32 + (player.y - hover_gy).pow(2) as f32).sqrt();
+                                if dist <= 3.5 {
+                                    match world.place_block_at(hover_gx, hover_gy, item) {
+                                        Ok(_) => {
+                                            player.inventory.remove_item(item, 1);
+                                            player.energy = (player.energy - 3.0).max(0.0);
+                                            let rem = player.inventory.count_item(item);
+                                            ui_state.add_log(format!("🔨 Placed {} at ({}, {})! (Remaining: {})", item.name(), hover_gx, hover_gy, rem));
+                                        }
+                                        Err(e) => {
+                                            ui_state.add_log(format!("Cannot place block: {}", e));
+                                        }
                                     }
-                                    Err(e) => {
-                                        ui_state.add_log(format!("Cannot place block: {}", e));
-                                    }
+                                } else if let Some(path) = find_path(world, (player.x, player.y), (hover_gx, hover_gy)) {
+                                    *destination_marker = Some((hover_gx, hover_gy));
+                                    player.set_path(path);
+                                    ui_state.add_log(format!("Moving closer to place {}...", item.name()));
                                 }
-                            } else if let Some(path) = find_path(world, (player.x, player.y), (hover_gx, hover_gy)) {
-                                *destination_marker = Some((hover_gx, hover_gy));
-                                player.set_path(path);
-                                ui_state.add_log(format!("Moving closer to place {}...", item.name()));
+                            } else {
+                                ui_state.add_log("No building blocks in backpack to place. Craft Wood Planks or Cobblestone [I].".to_string());
                             }
-                        } else {
-                            ui_state.add_log("No building blocks in backpack to place. Craft Wood Planks or Cobblestone [I].".to_string());
                         }
                     }
                 }
 
-                // Clic izquierdo: Pathfinding A* o Caza de Animales o Minería/Tala con herramienta
+                // Clic izquierdo: Colocar Bloque (en Modo Construcción) o Pathfinding A* / Caza de Animales
                 if is_mouse_button_pressed(MouseButton::Left)
                     && !ui_res.is_mouse_over_ui
                     && !inventory_ui.is_open
+                    && !is_mouse_over_radar
                     && camera.is_point_in_viewport(mx, my)
                 {
                     if is_hover_in_bounds {
-                        // Comprobar si el clic fue sobre una criatura para cazarla
-                        if let Some(c_idx) = world.find_creature_near(hover_gx, hover_gy, 1.2) {
+                        if *is_build_mode {
+                            handle_place_block(world, player, ui_state, *build_material, hover_gx, hover_gy, destination_marker);
+                        } else if let Some(c_idx) = world.find_creature_near(hover_gx, hover_gy, 1.2) {
                             let c_name = world.creatures[c_idx].kind.name();
                             let cx = world.creatures[c_idx].x;
                             let cy = world.creatures[c_idx].y;
@@ -1038,19 +1243,6 @@ async fn main() {
                     }
                 }
 
-                let hover_coord = if is_hover_in_bounds && camera.is_point_in_viewport(mx, my) {
-                    Some((hover_gx, hover_gy))
-                } else {
-                    None
-                };
-
-                renderer.render(
-                    world,
-                    player,
-                    camera,
-                    hover_coord,
-                    *destination_marker,
-                );
 
                 // Renderizado del HUD del Radar y lista desplegable
                 let radar_res = render_radar_hud(radar, font.as_ref(), player.x, player.y);
